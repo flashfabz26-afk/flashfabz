@@ -1,11 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'gerber_parser.dart';
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  2D PCB Painter — renders actual Gerber geometry from PCBLayerData
-// ═══════════════════════════════════════════════════════════════════════════
-
 class GerberPCBPainter extends CustomPainter {
   final PCBLayerData layerData;
   final Color maskColor;
@@ -26,8 +21,6 @@ class GerberPCBPainter extends CustomPainter {
       _drawPlaceholder(canvas, size, 'No Gerber geometry detected');
       return;
     }
-
-    // ── Transform: mm → canvas pixels ─────────────────────────────────────
     const margin = 28.0;
     final scale = math.min(
       (size.width - margin * 2) / bbox.width,
@@ -37,8 +30,6 @@ class GerberPCBPainter extends CustomPainter {
     final boardH = bbox.height * scale;
     final ox = (size.width - boardW) / 2;
     final oy = (size.height - boardH) / 2;
-
-    // Gerber Y-axis is bottom-up; canvas is top-down → flip Y
     Offset c(Offset mm) => Offset(
       (mm.dx - bbox.left) * scale + ox,
       boardH - (mm.dy - bbox.top) * scale + oy,
@@ -47,18 +38,12 @@ class GerberPCBPainter extends CustomPainter {
     final boardRect = Rect.fromLTWH(ox, oy, boardW, boardH);
     final boardR = math.max(2.0, math.min(6.0, scale * 0.8));
     final boardRRect = RRect.fromRectAndRadius(boardRect, Radius.circular(boardR));
-
-    // ── 1. Canvas background ─────────────────────────────────────────────
     canvas.drawRect(
       Rect.fromLTWH(0, 0, size.width, size.height),
       Paint()..color = const Color(0xFF0A0A12),
     );
-
-    // ── 2. FR-4 substrate (bare board color) ─────────────────────────────
     canvas.drawRRect(boardRRect, Paint()..color = const Color(0xFFD6943C));
-
-    // ── 3. Copper traces ─────────────────────────────────────────────────
-    if (!hiddenLayers.contains(isTop ? 'Top.copper' : 'Bottom.copper')) {
+ if (!hiddenLayers.contains(isTop ? 'Top.copper' : 'Bottom.copper')) {
       final tracePaint = Paint()
         ..color = const Color(0xFFDE9F4D)
         ..strokeCap = StrokeCap.round
@@ -67,7 +52,6 @@ class GerberPCBPainter extends CustomPainter {
 
       canvas.save();
       canvas.clipRRect(boardRRect);
-      // Trim for performance — 8 000 traces / 2 000 pads covers most real boards
       final traces = layerData.traces.toList();
       if (traces.length > 8000) traces.removeRange(8000, traces.length);
       for (final t in traces) {
@@ -76,8 +60,6 @@ class GerberPCBPainter extends CustomPainter {
       }
       canvas.restore();
     }
-
-    // ── 4. Copper pads ───────────────────────────────────────────────────
     if (!hiddenLayers.contains(isTop ? 'Top.copper' : 'Bottom.copper')) {
       final padPaint = Paint()
         ..color = const Color(0xFFDE9F4D)
@@ -97,14 +79,11 @@ class GerberPCBPainter extends CustomPainter {
       }
       canvas.restore();
     }
-
-    // ── 5. Solder mask overlay ───────────────────────────────────────────
     final showMask = !hiddenLayers.contains(isTop ? 'Top.soldermask' : 'Bottom.soldermask');
     if (showMask) {
       canvas.saveLayer(boardRect, Paint());
 
-      // Tinted mask layer
-      canvas.drawRRect(
+       canvas.drawRRect(
         boardRRect,
         Paint()..color = maskColor.withOpacity(0.85),
       );
@@ -119,7 +98,7 @@ class GerberPCBPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round
         ..style = PaintingStyle.stroke;
 
-      // Punch holes for soldermask pads
+  
       for (final p in layerData.soldermaskPads) {
         final cx = c(p.center);
         final w = (p.width * scale).clamp(1.0, 100.0);
@@ -130,14 +109,11 @@ class GerberPCBPainter extends CustomPainter {
           canvas.drawRect(Rect.fromCenter(center: cx, width: w, height: h), clearFill);
         }
       }
-
-      // Punch holes for soldermask traces
       for (final t in layerData.soldermaskTraces) {
         clearStroke.strokeWidth = (t.width * scale).clamp(0.5, 50.0);
         canvas.drawLine(c(t.start), c(t.end), clearStroke);
       }
       
-      // Fallback: If no mask data could be parsed, expose all copper pads
       if (layerData.soldermaskPads.isEmpty && layerData.soldermaskTraces.isEmpty) {
         for (final p in layerData.pads) {
           final cx = c(p.center);
@@ -154,7 +130,6 @@ class GerberPCBPainter extends CustomPainter {
       canvas.restore();
     }
 
-    // ── 6. Board outline (edge cuts) ─────────────────────────────────────
     if (!hiddenLayers.contains('All.outline')) {
       final outlinePaint = Paint()
         ..color = Colors.amber.shade300.withOpacity(0.7)
@@ -171,7 +146,6 @@ class GerberPCBPainter extends CustomPainter {
       }
     }
 
-    // ── 7. Drill holes ───────────────────────────────────────────────────
     if (!hiddenLayers.contains('All.drill')) {
       final ringPaint = Paint()
         ..color = const Color(0xFFDE9F4D)
@@ -188,7 +162,7 @@ class GerberPCBPainter extends CustomPainter {
       }
     }
 
-    // ── 8. Silkscreen ────────────────────────────────────────────────────
+   
     if (!hiddenLayers.contains(isTop ? 'Top.silkscreen' : 'Bottom.silkscreen')) {
       final silkPaint = Paint()
         ..color = Colors.white.withOpacity(0.9)
@@ -204,10 +178,6 @@ class GerberPCBPainter extends CustomPainter {
       canvas.restore();
     }
 
-    // ── 9. No-data fallback (silently ignored) 
-    // If there is no copper data, we simply render the board without copper traces.
-    // This avoids showing an empty placeholder message.
-    // No action needed when layerData.hasData is false.
   }
 
   void _drawPlaceholder(Canvas canvas, Size size, String msg) {
@@ -236,9 +206,6 @@ class GerberPCBPainter extends CustomPainter {
       old.hiddenLayers != hiddenLayers;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  3D Isometric PCB Painter
-// ═══════════════════════════════════════════════════════════════════════════
 
 class GerberPCB3DPainter extends CustomPainter {
   final PCBLayerData topLayer;
@@ -269,9 +236,6 @@ class GerberPCB3DPainter extends CustomPainter {
     final boardW = size.width * 0.52;
     final boardH = boardW * aspect;
     const thick = 10.0;
-
-    // Isometric projection using provided rotY and tiltX parameters
-
     Offset proj(double lx, double ly, double lz) {
       final rx = lx * math.cos(rotY) + lz * math.sin(rotY);
       final rz = -lx * math.sin(rotY) + lz * math.cos(rotY);
@@ -279,7 +243,7 @@ class GerberPCB3DPainter extends CustomPainter {
       return Offset(cx + rx, cy + ry * 0.82);
     }
 
-    // 8 board corners
+
     final tl = proj(-boardW / 2, -boardH / 2, thick / 2);
     final tr = proj(boardW / 2, -boardH / 2, thick / 2);
     final br = proj(boardW / 2, boardH / 2, thick / 2);
@@ -288,8 +252,6 @@ class GerberPCB3DPainter extends CustomPainter {
     final trb = proj(boardW / 2, -boardH / 2, -thick / 2);
     final brb = proj(boardW / 2, boardH / 2, -thick / 2);
     final blb = proj(-boardW / 2, boardH / 2, -thick / 2);
-
-    // Shadow
     final shadowPath = Path()
       ..moveTo(tl.dx + 12, tl.dy + 18)
       ..lineTo(tr.dx + 12, tr.dy + 18)
@@ -302,17 +264,14 @@ class GerberPCB3DPainter extends CustomPainter {
         ..color = Colors.black.withOpacity(0.38)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16),
     );
-
-    // Bottom face
     _quad(canvas, [tlb, trb, brb, blb], const Color(0xFF9A6218));
 
-    // Side faces (shaded)
-    _quad(canvas, [tl, tlb, blb, bl], const Color(0xFF7A4E10)); // left
-    _quad(canvas, [tr, trb, brb, br], const Color(0xFFBB7A1C)); // right
-    _quad(canvas, [tl, tr, trb, tlb], const Color(0xFF8A5A12)); // top edge
-    _quad(canvas, [bl, br, brb, blb], const Color(0xFF6A4510)); // bottom edge
+    _quad(canvas, [tl, tlb, blb, bl], const Color(0xFF7A4E10)); 
+    _quad(canvas, [tr, trb, brb, br], const Color(0xFFBB7A1C)); 
+    _quad(canvas, [tl, tr, trb, tlb], const Color(0xFF8A5A12)); 
+    _quad(canvas, [bl, br, brb, blb], const Color(0xFF6A4510)); 
 
-    // Top PCB face (solder mask color)
+  
     final topPath = Path()
       ..moveTo(tl.dx, tl.dy)
       ..lineTo(tr.dx, tr.dy)
@@ -322,7 +281,6 @@ class GerberPCB3DPainter extends CustomPainter {
 
     canvas.drawPath(topPath, Paint()..color = maskColor.withOpacity(0.90));
 
-    // Copper traces on top face
     if (!hiddenLayers.contains('Top.copper') &&
         topLayer.traces.isNotEmpty &&
         bbox.width > 0) {
@@ -342,7 +300,7 @@ class GerberPCB3DPainter extends CustomPainter {
         canvas.drawLine(surfPt(t.start), surfPt(t.end), tp);
       }
 
-      // Pads
+ 
       if (!hiddenLayers.contains('Top.solderpaste')) {
         final pp = Paint()..color = const Color(0xFFDE9F4D)..style = PaintingStyle.fill;
         for (final p in topLayer.pads.take(200)) {
@@ -351,7 +309,7 @@ class GerberPCB3DPainter extends CustomPainter {
       }
     }
 
-    // Silkscreen on top face
+    
     if (!hiddenLayers.contains('Top.silkscreen') &&
         topLayer.silkscreen.isNotEmpty &&
         bbox.width > 0) {
@@ -371,7 +329,7 @@ class GerberPCB3DPainter extends CustomPainter {
       }
     }
 
-    // Top face highlight edge
+ 
     canvas.drawPath(
       topPath,
       Paint()
