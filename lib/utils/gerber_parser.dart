@@ -1,22 +1,17 @@
 import 'dart:math' as math;
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  PCB Layer Data Structures
-// ═══════════════════════════════════════════════════════════════════════════
-
 class PCBTrace {
   final Offset start;
   final Offset end;
-  final double width; // mm
+  final double width; 
   const PCBTrace({required this.start, required this.end, required this.width});
 }
 
 class PCBPad {
   final Offset center;
-  final double width;  // mm
-  final double height; // mm
+  final double width;  
+  final double height; 
   final bool isCircle;
   const PCBPad({
     required this.center,
@@ -28,7 +23,7 @@ class PCBPad {
 
 class PCBDrill {
   final Offset center;
-  final double diameter; // mm
+  final double diameter; 
   const PCBDrill({required this.center, required this.diameter});
 }
 
@@ -36,11 +31,11 @@ class PCBLayerData {
   final List<PCBTrace> traces;
   final List<PCBPad> pads;
   final List<PCBDrill> drills;
-  final List<PCBTrace> outline;    // board edge-cut segments
-  final List<PCBTrace> silkscreen; // silk layer
-  final List<PCBTrace> soldermaskTraces; // mask openings (traces)
-  final List<PCBPad> soldermaskPads;     // mask openings (pads)
-  final Rect bbox;                 // bounding box in mm
+  final List<PCBTrace> outline;    
+  final List<PCBTrace> silkscreen; 
+  final List<PCBTrace> soldermaskTraces; 
+  final List<PCBPad> soldermaskPads;     
+  final Rect bbox;                 
 
   const PCBLayerData({
     required this.traces,
@@ -98,9 +93,6 @@ class PCBLayerData {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  GerberParseResult
-// ═══════════════════════════════════════════════════════════════════════════
 
 class GerberParseResult {
   final String dimensions;
@@ -118,18 +110,13 @@ class GerberParseResult {
   final String boardType;
   final String discreteDesign;
   final String minLineWidth;
-  
-  // API URLs for rendered assets
-  final String? topImageUrl;
+   final String? topImageUrl;
   final String? bottomImageUrl;
   final String? model3dUrl;
-
-  // Local PCB visualization (optional, if rendered locally)
   final PCBLayerData? topLayer;
   final PCBLayerData? bottomLayer;
-  final String uploadId; // unique per upload, used as ValueKey cache-buster
-
-  const GerberParseResult({
+  final String uploadId; 
+const GerberParseResult({
     required this.dimensions,
     required this.layerCount,
     required this.copperWeight,
@@ -154,21 +141,12 @@ class GerberParseResult {
   });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Internal aperture model
-// ═══════════════════════════════════════════════════════════════════════════
-
 class _Aperture {
   final String shape; // 'C', 'R', 'O', 'P'
   final double sizeX;
   final double sizeY;
   const _Aperture({required this.shape, required this.sizeX, required this.sizeY});
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  Gerber Layer Parser — extracts traces, pads from one RS-274X file
-// ═══════════════════════════════════════════════════════════════════════════
-
 class _GerberLayerParser {
   final String content;
 
@@ -189,21 +167,17 @@ class _GerberLayerParser {
     // Units
     _imperial = content.contains('%MOIN*%');
 
-    // Format spec: %FSLAXabYcd*%  → decimal digits = b
+   
     final fsm = RegExp(r'%FSL[AILTMN]*X\d(\d)Y\d\d\*%').firstMatch(content);
     if (fsm != null) {
       _div = math.pow(10, int.tryParse(fsm.group(1) ?? '6') ?? 6).toDouble();
     }
-
-    // Aperture definitions: %ADDnC,d*% / %ADDnR,wxh*% / %ADDnO,wxh*%
     final aptRe = RegExp(r'%ADD(\d+)([CROP]),([^*]*)\*%');
     for (final m in aptRe.allMatches(content)) {
       final n = int.parse(m.group(1)!);
       final shape = m.group(2)!;
-      // Parameters are separated by 'X' — handle optional secondary params
       final rawParam = m.group(3) ?? '0.1';
-      // Split on X that is followed by a digit (not part of exponent)
-      final parts = rawParam.split(RegExp(r'X(?=[\d.])'));
+  final parts = rawParam.split(RegExp(r'X(?=[\d.])'));
       double sx = (double.tryParse(parts[0]) ?? 0.1).abs();
       double sy = (parts.length > 1 ? double.tryParse(parts[1]) ?? sx : sx).abs();
       if (_imperial) {
@@ -213,17 +187,16 @@ class _GerberLayerParser {
       _apertures[n] = _Aperture(shape: shape, sizeX: sx, sizeY: sy);
     }
 
-    // Process command statements (split on '*')
+    
     final stmts = content.split('*');
     for (final rawStmt in stmts) {
       final s = rawStmt.replaceAll(RegExp(r'[\r\n\s]'), '');
       if (s.isEmpty || s.startsWith('%')) continue;
 
-      // Region mode
       if (s.endsWith('G36')) { _inRegion = true; continue; }
       if (s.endsWith('G37')) { _inRegion = false; continue; }
 
-      // Main coordinate command: [Gnn][Xnnn][Ynnn][Inn][Jnn]Dnn
+      
       final coordMatch = RegExp(
         r'^(?:G\d+)*(?:X([+-]?\d+))?(?:Y([+-]?\d+))?(?:I[+-]?\d+)?(?:J[+-]?\d+)?D(\d+)$',
       ).firstMatch(s);
@@ -244,16 +217,12 @@ class _GerberLayerParser {
         _y = ny;
         continue;
       }
-
-      // Standalone aperture select: Dnn
-      final aptSel = RegExp(r'^D(\d+)$').firstMatch(s);
+final aptSel = RegExp(r'^D(\d+)$').firstMatch(s);
       if (aptSel != null) {
         final n = int.parse(aptSel.group(1)!);
         if (n >= 10) _apt = n;
       }
     }
-
-    // Trim for performance
     if (traces.length > 1500) traces.removeRange(1500, traces.length);
     if (pads.length > 500) pads.removeRange(500, pads.length);
   }
@@ -262,7 +231,7 @@ class _GerberLayerParser {
     if (_inRegion) return;
     final ap = _apertures[_apt];
     switch (d) {
-      case 1: // Draw line
+      case 1: 
         if (ap != null && (_x != nx || _y != ny)) {
           traces.add(PCBTrace(
             start: Offset(_x, _y),
@@ -271,7 +240,7 @@ class _GerberLayerParser {
           ));
         }
         break;
-      case 3: // Flash pad
+      case 3:
         if (ap != null) {
           final h = (ap.sizeY > 0 ? ap.sizeY : ap.sizeX).clamp(0.05, 30.0);
           pads.add(PCBPad(
@@ -292,12 +261,7 @@ class _GerberLayerParser {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Main Gerber Parser
-// ═══════════════════════════════════════════════════════════════════════════
-
 class GerberParser {
-  // ── Layer file-extension matchers ────────────────────────────────────────
   static bool _isTopCopper(String n) =>
       n.endsWith('.gtl') || n.endsWith('.cmp') || 
       n.contains('f.cu') || n.contains('f_cu') ||
@@ -372,8 +336,6 @@ class GerberParser {
       return null;
     }
   }
-
-  // ── Entry point ──────────────────────────────────────────────────────────
   static GerberParseResult parseZipBytes(List<int> bytes) {
     final archive = ZipDecoder().decodeBytes(bytes);
 
@@ -429,8 +391,6 @@ class GerberParser {
     if (allGerberContents.isEmpty) {
       throw Exception('No valid Gerber files found in the uploaded ZIP.');
     }
-
-    // ── Spec calculations (existing logic) ─────────────────────────────────
     String dims;
     if (outlineContent != null) {
       dims = _parseDimensions(outlineContent);
@@ -447,19 +407,12 @@ class GerberParser {
     final area = _areaFromDims(dims);
     final unitPrice = _calcPrice(area, layerCount);
     final copperUm = layerCount >= 4 ? '2 oz / 70 µm' : '1 oz / 35 µm';
-
-    // ── Geometry extraction ────────────────────────────────────────────────
-
-    // Outline segments
     final outlineSegs = <PCBTrace>[];
     if (outlineContent != null) {
       final p = _GerberLayerParser(outlineContent);
       p.parse();
       outlineSegs.addAll(p.traces);
-      // Flashed pads on outline layers are rare, ignore pads here
     }
-
-    // Top copper
     final topTraces = <PCBTrace>[], topPads = <PCBPad>[];
     if (topCopperContent != null) {
       final p = _GerberLayerParser(topCopperContent);
@@ -467,8 +420,6 @@ class GerberParser {
       topTraces.addAll(p.traces);
       topPads.addAll(p.pads);
     }
-
-    // Bottom copper
     final botTraces = <PCBTrace>[], botPads = <PCBPad>[];
     if (bottomCopperContent != null) {
       final p = _GerberLayerParser(bottomCopperContent);
@@ -477,7 +428,6 @@ class GerberParser {
       botPads.addAll(p.pads);
     }
 
-    // Silkscreen
     final topSilkTraces = <PCBTrace>[];
     if (topSilkContent != null) {
       final p = _GerberLayerParser(topSilkContent);
@@ -491,7 +441,6 @@ class GerberParser {
       botSilkTraces.addAll(p.traces);
     }
 
-    // Solder Mask
     final topMaskTraces = <PCBTrace>[], topMaskPads = <PCBPad>[];
     if (topMaskContent != null) {
       final p = _GerberLayerParser(topMaskContent);
@@ -506,18 +455,13 @@ class GerberParser {
       botMaskTraces.addAll(p.traces);
       botMaskPads.addAll(p.pads);
     }
-
-    // Drill holes
     final drills = _parseDrillList(drillContent);
-
-    // Compute unified bbox across both layers + outline
     final Rect overallBbox;
     final allTraces = [...topTraces, ...botTraces, ...outlineSegs];
     final allPads = [...topPads, ...botPads];
     if (allTraces.isNotEmpty || allPads.isNotEmpty) {
       overallBbox = PCBLayerData.computeBBox(allTraces, allPads, outlineSegs, []);
     } else {
-      // Fallback: derive from dimension string
       final m = RegExp(r'([\d.]+)\s*mm\s*x\s*([\d.]+)\s*mm').firstMatch(dims);
       final w = double.tryParse(m?.group(1) ?? '') ?? 100;
       final h = double.tryParse(m?.group(2) ?? '') ?? 80;
@@ -566,18 +510,14 @@ class GerberParser {
       uploadId:        'upload_${DateTime.now().millisecondsSinceEpoch}_${math.Random().nextInt(99999)}',
     );
   }
-
-  // ── Excellon drill file parser ───────────────────────────────────────────
   static List<PCBDrill> _parseDrillList(String? content) {
     if (content == null) return [];
     final drills = <PCBDrill>[];
     final toolDefs = <int, double>{};
-
-    // Tool diameter definitions: T01C0.300
     final toolRe = RegExp(r'T(\d+)C([\d.]+)');
     for (final m in toolRe.allMatches(content)) {
       double d = double.tryParse(m.group(2) ?? '0.3') ?? 0.3;
-      if (d < 0.1) d *= 25.4; // inches → mm
+      if (d < 0.1) d *= 25.4; 
       toolDefs[int.parse(m.group(1)!)] = d;
     }
 
@@ -590,21 +530,16 @@ class GerberParser {
     for (final line in content.split(RegExp(r'\r?\n'))) {
       final t = line.trim();
       if (t.startsWith(';') || t.startsWith('%') || t.startsWith('M48') || t.isEmpty) continue;
-
-      // Tool select: T01
       final ts = RegExp(r'^T(\d+)$').firstMatch(t);
       if (ts != null) {
         currentTool = int.parse(ts.group(1)!);
         continue;
       }
 
-      // Drill hit: X...Y...
       final dh = RegExp(r'X([+-]?[\d.]+)Y([+-]?[\d.]+)').firstMatch(t);
       if (dh != null) {
         double x = double.tryParse(dh.group(1)!) ?? 0;
         double y = double.tryParse(dh.group(2)!) ?? 0;
-
-        // Auto-scale integer coordinates (no decimal point → legacy format)
         if (!dh.group(1)!.contains('.')) {
           if (x.abs() > 10000) {
             x /= 100000;
@@ -618,7 +553,6 @@ class GerberParser {
           }
         }
 
-        // Convert inches to mm if imperial
         if (!isMetric && x.abs() < 100) {
           x *= 25.4;
           y *= 25.4;
@@ -635,9 +569,6 @@ class GerberParser {
 
     return drills.take(600).toList();
   }
-
-  // ── Spec helpers (unchanged from original) ───────────────────────────────
-
   static int _computeLayerCount(int top, int bottom, int inner, int totalFiles) {
     if (top > 0 || bottom > 0 || inner > 0) {
       final detected = (top > 0 ? 1 : 0) + (bottom > 0 ? 1 : 0) + inner;
