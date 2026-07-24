@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'signup_page.dart';
-
+import 'auth_service.dart';
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -12,6 +12,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  bool _obscurePassword = true;
 
   @override
   void dispose() {
@@ -131,17 +132,37 @@ class _LoginPageState extends State<LoginPage> {
                           label: 'Password',
                           icon: Icons.lock_outline,
                           isPassword: true,
+                          obscureText: _obscurePassword,
+                          onToggleVisibility: () {
+                            setState(() {
+                              _obscurePassword = !_obscurePassword;
+                            });
+                          },
                         ),
                         const SizedBox(height: 40),
                         SizedBox(
                           width: double.infinity,
                           height: 55,
                           child: ElevatedButton(
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Logged in successfully! (Mock)')),
-                              );
-                              Navigator.of(context).popUntil((route) => route.isFirst);
+                            onPressed: () async {
+                              if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Please enter email and password')),
+                                );
+                                return;
+                              }
+                              String? error = await AuthService.login(_emailController.text, _passwordController.text);
+                              if (!context.mounted) return;
+                              if (error == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Logged in successfully!')),
+                                );
+                                Navigator.of(context).popUntil((route) => route.isFirst);
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(error)),
+                                );
+                              }
                             },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.transparent,
@@ -221,15 +242,26 @@ class _LoginPageState extends State<LoginPage> {
     required String label,
     required IconData icon,
     bool isPassword = false,
+    bool obscureText = false,
+    VoidCallback? onToggleVisibility,
   }) {
     return TextField(
       controller: controller,
-      obscureText: isPassword,
+      obscureText: obscureText,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
         labelStyle: TextStyle(color: Colors.white.withOpacity(0.6)),
         prefixIcon: Icon(icon, color: Colors.white.withOpacity(0.6)),
+        suffixIcon: isPassword
+            ? IconButton(
+                icon: Icon(
+                  obscureText ? Icons.visibility_off : Icons.visibility,
+                  color: Colors.white.withOpacity(0.6),
+                ),
+                onPressed: onToggleVisibility,
+              )
+            : null,
         filled: true,
         fillColor: Colors.white.withOpacity(0.05),
         border: OutlineInputBorder(

@@ -9,10 +9,13 @@ import 'sections/contact_section.dart';
 import 'sections/footer_section.dart';
 import 'sections/gerber_upload_section.dart';
 import 'auth/login_page.dart';
+import 'auth/auth_service.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const LionCircuitsApp());
 }
+
 
 class LionCircuitsApp extends StatelessWidget {
   const LionCircuitsApp({super.key});
@@ -177,11 +180,17 @@ class _NavBarState extends State<_NavBar> {
             _navItem('About', widget.onAbout),
             _navItem('Services', widget.onServices),
             _navItem('Contact', widget.onContact),
-            _navItem('Login', () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const LoginPage()),
-              );
+            _navItem(AuthService.isLoggedIn ? 'Profile' : 'Login', () {
+              if (AuthService.isLoggedIn) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Already signed in')),
+                );
+              } else {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const LoginPage()),
+                ).then((_) => setState(() {}));
+              }
             }),
             const SizedBox(width: 16),
             GestureDetector(

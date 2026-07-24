@@ -39,6 +39,8 @@ dependencies:
   archive: ^4.0.9
   http: ^1.6.0
   model_viewer_plus: ^1.10.0
+  crypto: ^3.0.3
+
 
 dev_dependencies:
   flutter_test:
