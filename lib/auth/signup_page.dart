@@ -19,7 +19,9 @@ class _SignupPageState extends State<SignupPage> {
 
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
-  
+  bool _isLoading = false;
+  String? _errorMessage;
+
   bool _hasMinLength = false;
   bool _hasUppercase = false;
   bool _hasLowercase = false;
@@ -31,9 +33,21 @@ class _SignupPageState extends State<SignupPage> {
   void initState() {
     super.initState();
     _passwordController.addListener(_updatePasswordStatus);
+    _nameController.addListener(_clearError);
+    _emailController.addListener(_clearError);
+    _confirmPasswordController.addListener(_clearError);
+  }
+
+  void _clearError() {
+    if (_errorMessage != null) {
+      setState(() {
+        _errorMessage = null;
+      });
+    }
   }
 
   void _updatePasswordStatus() {
+    _clearError();
     final password = _passwordController.text;
     setState(() {
       _hasMinLength = PasswordValidator.hasMinLength(password);
@@ -48,6 +62,9 @@ class _SignupPageState extends State<SignupPage> {
   @override
   void dispose() {
     _passwordController.removeListener(_updatePasswordStatus);
+    _nameController.removeListener(_clearError);
+    _emailController.removeListener(_clearError);
+    _confirmPasswordController.removeListener(_clearError);
     _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
@@ -66,6 +83,126 @@ class _SignupPageState extends State<SignupPage> {
         !PasswordValidator.containsNameOrEmail(
             _passwordController.text, _nameController.text, _emailController.text) &&
         !PasswordValidator.isCommonPassword(_passwordController.text);
+  }
+
+  void _showSnackBar(String message, {bool isError = true}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: isError ? Colors.redAccent.shade700 : Colors.teal.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: Duration(seconds: isError ? 5 : 2),
+      ),
+    );
+  }
+
+  Future<void> _handleRegister() async {
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+
+    if (name.isEmpty || email.isEmpty || password.isEmpty) {
+      setState(() => _errorMessage = 'Please fill in all required fields.');
+      _showSnackBar('Please fill in all required fields.');
+      return;
+    }
+
+    if (!PasswordValidator.hasMinLength(password)) {
+      setState(() => _errorMessage = 'Password must be at least 8 characters.');
+      _showSnackBar('Password must be at least 8 characters.');
+      return;
+    }
+    if (!PasswordValidator.hasUppercase(password)) {
+      setState(() => _errorMessage = 'Password must contain at least one uppercase letter.');
+      _showSnackBar('Password must contain at least one uppercase letter.');
+      return;
+    }
+    if (!PasswordValidator.hasLowercase(password)) {
+      setState(() => _errorMessage = 'Password must contain at least one lowercase letter.');
+      _showSnackBar('Password must contain at least one lowercase letter.');
+      return;
+    }
+    if (!PasswordValidator.hasNumber(password)) {
+      setState(() => _errorMessage = 'Password must contain at least one number.');
+      _showSnackBar('Password must contain at least one number.');
+      return;
+    }
+    if (!PasswordValidator.hasSpecialCharacter(password)) {
+      setState(() => _errorMessage = 'Password must contain at least one special character.');
+      _showSnackBar('Password must contain at least one special character.');
+      return;
+    }
+    if (!PasswordValidator.hasNoSpaces(password)) {
+      setState(() => _errorMessage = 'Password cannot contain spaces.');
+      _showSnackBar('Password cannot contain spaces.');
+      return;
+    }
+    if (password != _confirmPasswordController.text) {
+      setState(() => _errorMessage = 'Passwords do not match.');
+      _showSnackBar('Passwords do not match.');
+      return;
+    }
+    if (PasswordValidator.containsNameOrEmail(password, name, email)) {
+      setState(() => _errorMessage = 'Security: Password cannot contain your Name or Email prefix.');
+      _showSnackBar('Password cannot contain your name or email prefix.');
+      return;
+    }
+
+    if (PasswordValidator.isCommonPassword(password)) {
+      setState(() => _errorMessage = 'Please choose a less common, more secure password.');
+      _showSnackBar('Please choose a less common, more secure password.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final result = await AuthService.registerWithDetails(name, email, password);
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        _showSnackBar(
+          result['message'] ?? 'Account created successfully!',
+          isError: false,
+        );
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      } else {
+        final errorMsg = result['error'] ?? 'Registration failed. Please check server connection.';
+        setState(() => _errorMessage = errorMsg);
+        _showSnackBar(errorMsg, isError: true);
+      }
+    } catch (e) {
+      final err = 'Unexpected registration error: $e';
+      setState(() => _errorMessage = err);
+      _showSnackBar(err, isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   Widget _buildChecklistItem(String text, bool isMet) {
@@ -100,6 +237,8 @@ class _SignupPageState extends State<SignupPage> {
     if (passwordStrength == 'Strong') strengthColor = Colors.lightGreen;
     if (passwordStrength == 'Very Strong') strengthColor = Colors.green;
 
+    final canSubmit = _isPasswordValid && !_isLoading;
+
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -118,8 +257,8 @@ class _SignupPageState extends State<SignupPage> {
                 center: Alignment.bottomRight,
                 radius: 1.5,
                 colors: [
-                  Color(0xFF003049), 
-                  Color(0xFF07070A), 
+                  Color(0xFF003049),
+                  Color(0xFF07070A),
                 ],
               ),
             ),
@@ -201,12 +340,14 @@ class _SignupPageState extends State<SignupPage> {
                           controller: _nameController,
                           label: 'Full Name',
                           icon: Icons.person_outline,
+                          enabled: !_isLoading,
                         ),
                         const SizedBox(height: 20),
                         _buildTextField(
                           controller: _emailController,
                           label: 'Email',
                           icon: Icons.email_outlined,
+                          enabled: !_isLoading,
                         ),
                         const SizedBox(height: 20),
                         _buildTextField(
@@ -215,6 +356,7 @@ class _SignupPageState extends State<SignupPage> {
                           icon: Icons.lock_outline,
                           isPassword: true,
                           obscureText: _obscurePassword,
+                          enabled: !_isLoading,
                           onToggleVisibility: () {
                             setState(() {
                               _obscurePassword = !_obscurePassword;
@@ -237,6 +379,8 @@ class _SignupPageState extends State<SignupPage> {
                           _buildChecklistItem('One number', _hasNumber),
                           _buildChecklistItem('One special character', _hasSpecialCharacter),
                           _buildChecklistItem('No spaces', _hasNoSpaces),
+                          _buildChecklistItem('Does not contain name or email prefix', !PasswordValidator.containsNameOrEmail(_passwordController.text, _nameController.text, _emailController.text)),
+                          _buildChecklistItem('Passwords match', _passwordController.text == _confirmPasswordController.text && _confirmPasswordController.text.isNotEmpty),
                         ],
                         const SizedBox(height: 20),
                         _buildTextField(
@@ -245,59 +389,41 @@ class _SignupPageState extends State<SignupPage> {
                           icon: Icons.lock_outline,
                           isPassword: true,
                           obscureText: _obscureConfirmPassword,
+                          enabled: !_isLoading,
                           onToggleVisibility: () {
                             setState(() {
                               _obscureConfirmPassword = !_obscureConfirmPassword;
                             });
                           },
                         ),
-                        const SizedBox(height: 40),
-                        
+                        if (_errorMessage != null) ...[
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent.shade700.withOpacity(0.9),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.error_outline, color: Colors.white, size: 20),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    _errorMessage!,
+                                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 30),
                         SizedBox(
                           width: double.infinity,
                           height: 55,
                           child: ElevatedButton(
-                            onPressed: _isPasswordValid
-                                ? () async {
-                                    if (_nameController.text.isEmpty || _emailController.text.isEmpty) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Please fill all fields')),
-                                      );
-                                      return;
-                                    }
-                                    if (PasswordValidator.containsNameOrEmail(
-                                        _passwordController.text, _nameController.text, _emailController.text)) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Password cannot contain name or email')),
-                                      );
-                                      return;
-                                    }
-                                    if (PasswordValidator.isCommonPassword(_passwordController.text)) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Please choose a less common password')),
-                                      );
-                                      return;
-                                    }
-
-                                    String? error = await AuthService.register(
-                                      _nameController.text,
-                                      _emailController.text,
-                                      _passwordController.text,
-                                    );
-
-                                    if (!context.mounted) return;
-                                    if (error == null) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Account created successfully!')),
-                                      );
-                                      Navigator.of(context).popUntil((route) => route.isFirst);
-                                    } else {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text(error)),
-                                      );
-                                    }
-                                  }
-                                : null,
+                            onPressed: _isLoading ? null : _handleRegister,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.transparent,
                               shadowColor: Colors.transparent,
@@ -310,7 +436,7 @@ class _SignupPageState extends State<SignupPage> {
                             ),
                             child: Ink(
                               decoration: BoxDecoration(
-                                gradient: _isPasswordValid
+                                gradient: canSubmit
                                     ? const LinearGradient(
                                         colors: [Color(0xFF00E5FF), Color(0xFF0072FF)],
                                       )
@@ -319,21 +445,29 @@ class _SignupPageState extends State<SignupPage> {
                               ),
                               child: Container(
                                 alignment: Alignment.center,
-                                child: Text(
-                                  'SIGN UP',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    letterSpacing: 1.2,
-                                    color: _isPasswordValid ? Colors.white : Colors.white.withOpacity(0.3),
-                                  ),
-                                ),
+                                child: _isLoading
+                                    ? const SizedBox(
+                                        height: 24,
+                                        width: 24,
+                                        child: CircularProgressIndicator(
+                                          color: Color(0xFF00E5FF),
+                                          strokeWidth: 2.5,
+                                        ),
+                                      )
+                                    : Text(
+                                        'SIGN UP',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          letterSpacing: 1.2,
+                                          color: canSubmit ? Colors.white : Colors.white.withOpacity(0.3),
+                                        ),
+                                      ),
                               ),
                             ),
                           ),
                         ),
                         const SizedBox(height: 24),
-                     
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -342,12 +476,14 @@ class _SignupPageState extends State<SignupPage> {
                               style: TextStyle(color: Colors.white.withOpacity(0.6)),
                             ),
                             TextButton(
-                              onPressed: () {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(builder: (context) => const LoginPage()),
-                                );
-                              },
+                              onPressed: _isLoading
+                                  ? null
+                                  : () {
+                                      Navigator.pushReplacement(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const LoginPage()),
+                                      );
+                                    },
                               style: TextButton.styleFrom(
                                 padding: EdgeInsets.zero,
                                 minimumSize: Size.zero,
@@ -381,11 +517,13 @@ class _SignupPageState extends State<SignupPage> {
     required IconData icon,
     bool isPassword = false,
     bool obscureText = false,
+    bool enabled = true,
     VoidCallback? onToggleVisibility,
   }) {
     return TextField(
       controller: controller,
       obscureText: obscureText,
+      enabled: enabled,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
@@ -397,7 +535,7 @@ class _SignupPageState extends State<SignupPage> {
                   obscureText ? Icons.visibility_off : Icons.visibility,
                   color: Colors.white.withOpacity(0.6),
                 ),
-                onPressed: onToggleVisibility,
+                onPressed: enabled ? onToggleVisibility : null,
               )
             : null,
         filled: true,
@@ -414,8 +552,11 @@ class _SignupPageState extends State<SignupPage> {
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: Color(0xFF00E5FF)),
         ),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.05)),
+        ),
       ),
     );
   }
 }
-

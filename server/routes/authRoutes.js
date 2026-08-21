@@ -1,14 +1,13 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const mongoose = require('mongoose');
+const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
-const User = require('../models/User');
 
 const router = express.Router();
 
-// Local dev fallback persistence file when MongoDB is offline
+// Local dev fallback persistence file
 const dataDir = path.join(__dirname, '../data');
 const usersFilePath = path.join(dataDir, 'users.json');
 
@@ -38,10 +37,16 @@ function saveDevUsers(usersMap) {
   }
 }
 
-const memoryUsers = loadDevUsers();
-
-// Helper to check MongoDB connection
-const isDbConnected = () => mongoose.connection.readyState === 1;
+function getFirestoreDb() {
+  try {
+    if (admin.apps.length > 0) {
+      return admin.firestore();
+    }
+  } catch (err) {
+    console.warn('[AUTH-FIRESTORE] Firestore not initialized:', err.message);
+  }
+  return null;
+}
 
 // Handler for registration / signup
 const handleRegister = async (req, res) => {
@@ -61,74 +66,69 @@ const handleRegister = async (req, res) => {
   const trimmedName = String(name).trim();
 
   try {
+    const devUsers = loadDevUsers();
+    const db = getFirestoreDb();
+
+    // Check if user already exists in local store
+    if (devUsers.has(normalizedEmail)) {
+      console.log(`[AUTH-SIGNUP] User already exists in local dev store: "${normalizedEmail}"`);
+      return res.status(409).json({ error: 'An account with this email address already exists.' });
+    }
+
+    // Also check Firebase Firestore if connected
+    if (db) {
+      const userRef = db.collection('users').where('email', '==', normalizedEmail);
+      const snapshot = await userRef.get();
+      if (!snapshot.empty) {
+        console.log(`[AUTH-SIGNUP] User already exists in Firebase Firestore: "${normalizedEmail}"`);
+        return res.status(409).json({ error: 'An account with this email address already exists.' });
+      }
+    }
+
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
+    const userId = 'user_' + Date.now();
 
-    if (isDbConnected()) {
-      // 1. Check existing user in MongoDB
-      const existingUser = await User.findOne({ email: normalizedEmail });
-      if (existingUser) {
-        console.log(`[AUTH-SIGNUP] User already exists in MongoDB: "${normalizedEmail}"`);
-        return res.status(400).json({ error: 'An account with this email address already exists.' });
+    // 1. Save to local dev persistence file (users.json)
+    const userObj = { id: userId, name: trimmedName, email: normalizedEmail, password: hashedPassword };
+    devUsers.set(normalizedEmail, userObj);
+    saveDevUsers(devUsers);
+    console.log(`[AUTH-SIGNUP] Account saved to local users.json (ID: ${userId})`);
+
+    // 2. Also save to Firebase Firestore if connected
+    let firebaseSaved = false;
+    if (db) {
+      try {
+        await db.collection('users').doc(userId).set({
+          id: userId,
+          name: trimmedName,
+          email: normalizedEmail,
+          password: hashedPassword,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        firebaseSaved = true;
+        console.log(`[AUTH-SIGNUP] Account saved to Firebase Firestore successfully: ID ${userId}`);
+      } catch (err) {
+        console.warn(`[AUTH-SIGNUP] Warning: Failed to save to Firestore, but saved locally: ${err.message}`);
       }
-
-      // 2. Save user to MongoDB
-      const newUser = new User({
-        name: trimmedName,
-        email: normalizedEmail,
-        password: hashedPassword,
-      });
-
-      await newUser.save();
-      console.log(`[AUTH-SIGNUP] User saved to MongoDB successfully: ID ${newUser._id}`);
-
-      // 3. Generate JWT Token
-      const token = jwt.sign(
-        { id: newUser._id, email: newUser.email },
-        process.env.JWT_SECRET || 'fallback_secret',
-        { expiresIn: '30d' }
-      );
-
-      console.log(`[AUTH-SIGNUP] JWT token generated successfully.`);
-      console.log(`[AUTH-SIGNUP] Result: SUCCESS`);
-      console.log('====================================================');
-
-      return res.status(201).json({
-        message: 'User registered successfully in MongoDB database.',
-        token,
-        user: { id: newUser._id, name: newUser.name, email: newUser.email },
-        storage: 'MongoDB Database',
-      });
-    } else {
-      // Fallback dev storage when MongoDB is not connected
-      console.log(`[AUTH-SIGNUP] MongoDB offline -> Using local persistent dev store`);
-      if (memoryUsers.has(normalizedEmail)) {
-        console.log(`[AUTH-SIGNUP] User already exists in dev store: "${normalizedEmail}"`);
-        return res.status(400).json({ error: 'An account with this email address already exists.' });
-      }
-
-      const userId = 'dev_' + Date.now();
-      const user = { id: userId, name: trimmedName, email: normalizedEmail, password: hashedPassword };
-      memoryUsers.set(normalizedEmail, user);
-      saveDevUsers(memoryUsers);
-
-      const token = jwt.sign(
-        { id: userId, email: normalizedEmail },
-        process.env.JWT_SECRET || 'fallback_secret',
-        { expiresIn: '30d' }
-      );
-
-      console.log(`[AUTH-SIGNUP] User saved to Dev Store (ID: ${userId})`);
-      console.log(`[AUTH-SIGNUP] Result: SUCCESS (Dev Store)`);
-      console.log('====================================================');
-
-      return res.status(201).json({
-        message: 'User registered successfully.',
-        token,
-        user: { id: userId, name: user.name, email: normalizedEmail },
-        storage: 'Local File / Dev Persistence',
-      });
     }
+
+    // 3. Generate JWT Token
+    const token = jwt.sign(
+      { id: userId, email: normalizedEmail },
+      process.env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '30d' }
+    );
+
+    console.log(`[AUTH-SIGNUP] Result: SUCCESS (Account registered)`);
+    console.log('====================================================');
+
+    return res.status(201).json({
+      message: 'Account created permanently.',
+      token,
+      user: { id: userId, name: trimmedName, email: normalizedEmail },
+      storage: firebaseSaved ? 'Firebase Firestore & Local JSON' : 'Local JSON File',
+    });
   } catch (error) {
     console.error(`[AUTH-SIGNUP] Server Error: ${error.message}`);
     console.log(`[AUTH-SIGNUP] Result: FAILED (Server Exception)`);
@@ -140,7 +140,6 @@ const handleRegister = async (req, res) => {
 // Handler for login
 const handleLogin = async (req, res) => {
   const { email, password } = req.body;
-
   const normalizedEmail = email ? String(email).trim().toLowerCase() : '';
 
   console.log('====================================================');
@@ -148,102 +147,79 @@ const handleLogin = async (req, res) => {
   console.log(`[AUTH-LOGIN] Entered Email: "${normalizedEmail}"`);
 
   if (!email || !password) {
-    console.log(`[AUTH-LOGIN] User found: false (Missing credentials)`);
-    console.log(`[AUTH-LOGIN] Password comparison result: N/A`);
-    console.log(`[AUTH-LOGIN] Authentication result: FAILED`);
+    console.log(`[AUTH-LOGIN] Authentication result: FAILED (Missing credentials)`);
     console.log('====================================================');
     return res.status(400).json({ error: 'Please enter both email and password.' });
   }
 
   try {
-    if (isDbConnected()) {
-      // 1. Search MongoDB for User
-      const user = await User.findOne({ email: normalizedEmail });
+    let foundUser = null;
+    let authSource = '';
+    const db = getFirestoreDb();
 
-      if (!user) {
-        console.log(`[AUTH-LOGIN] User found: false`);
-        console.log(`[AUTH-LOGIN] Password comparison result: N/A`);
-        console.log(`[AUTH-LOGIN] Authentication result: FAILED (Account Not Found)`);
-        console.log('====================================================');
-        return res.status(401).json({ error: 'No account found with this email address.' });
+    // 1. Search Firebase Firestore if connected
+    if (db) {
+      try {
+        const snapshot = await db.collection('users').where('email', '==', normalizedEmail).get();
+        if (!snapshot.empty) {
+          const docData = snapshot.docs[0].data();
+          foundUser = {
+            id: snapshot.docs[0].id,
+            name: docData.name,
+            email: docData.email,
+            password: docData.password,
+          };
+          authSource = 'Firebase Firestore';
+          console.log(`[AUTH-LOGIN] Account found in Firestore (ID: ${foundUser.id})`);
+        }
+      } catch (err) {
+        console.warn(`[AUTH-LOGIN] Firestore query error, falling back to local file store: ${err.message}`);
       }
-
-      console.log(`[AUTH-LOGIN] User found: true (ID: ${user._id})`);
-
-      // 2. Compare Password with bcrypt.compare()
-      const isMatch = await bcrypt.compare(password, user.password);
-      console.log(`[AUTH-LOGIN] Password comparison result: ${isMatch ? 'MATCH' : 'MISMATCH'}`);
-
-      if (!isMatch) {
-        console.log(`[AUTH-LOGIN] Authentication result: FAILED (Incorrect Password)`);
-        console.log('====================================================');
-        return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-      }
-
-      // 3. Generate JWT Token
-      const token = jwt.sign(
-        { id: user._id, email: user.email },
-        process.env.JWT_SECRET || 'fallback_secret',
-        { expiresIn: '30d' }
-      );
-
-      console.log(`[AUTH-LOGIN] Authentication result: SUCCESS`);
-      console.log('====================================================');
-
-      return res.json({
-        message: 'Login successful via MongoDB.',
-        token,
-        user: { id: user._id, name: user.name, email: user.email },
-        storage: 'MongoDB Database',
-      });
-    } else {
-      // Fallback dev store
-      console.log(`[AUTH-LOGIN] MongoDB offline -> Searching local dev store`);
-      let user = memoryUsers.get(normalizedEmail);
-
-      if (!user) {
-        console.log(`[AUTH-LOGIN] User "${normalizedEmail}" not found in dev store. Auto-registering for dev testing.`);
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-        const userId = 'dev_' + Date.now();
-        user = {
-          id: userId,
-          name: normalizedEmail.split('@')[0],
-          email: normalizedEmail,
-          password: hashedPassword,
-        };
-        memoryUsers.set(normalizedEmail, user);
-        saveDevUsers(memoryUsers);
-      }
-
-      console.log(`[AUTH-LOGIN] User found: true (Dev ID: ${user.id})`);
-
-
-      const isMatch = await bcrypt.compare(password, user.password);
-      console.log(`[AUTH-LOGIN] Password comparison result: ${isMatch ? 'MATCH' : 'MISMATCH'}`);
-
-      if (!isMatch) {
-        console.log(`[AUTH-LOGIN] Authentication result: FAILED (Incorrect Password)`);
-        console.log('====================================================');
-        return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-      }
-
-      const token = jwt.sign(
-        { id: user.id, email: user.email },
-        process.env.JWT_SECRET || 'fallback_secret',
-        { expiresIn: '30d' }
-      );
-
-      console.log(`[AUTH-LOGIN] Authentication result: SUCCESS (Dev Store)`);
-      console.log('====================================================');
-
-      return res.json({
-        message: 'Login successful.',
-        token,
-        user: { id: user.id, name: user.name, email: user.email },
-        storage: 'Local File / Dev Persistence',
-      });
     }
+
+    // 2. If not found in Firestore, search local JSON file store (users.json)
+    if (!foundUser) {
+      const devUsers = loadDevUsers();
+      const devUser = devUsers.get(normalizedEmail);
+      if (devUser) {
+        foundUser = devUser;
+        authSource = 'Local JSON File';
+        console.log(`[AUTH-LOGIN] Account found in local users.json store (ID: ${foundUser.id})`);
+      }
+    }
+
+    if (!foundUser) {
+      console.log(`[AUTH-LOGIN] Authentication result: FAILED (Account Not Found)`);
+      console.log('====================================================');
+      return res.status(401).json({ error: 'No account found with this email address. Please sign up first.' });
+    }
+
+    // 3. Compare Password
+    const isMatch = await bcrypt.compare(password, foundUser.password);
+    console.log(`[AUTH-LOGIN] Password comparison result: ${isMatch ? 'MATCH' : 'MISMATCH'}`);
+
+    if (!isMatch) {
+      console.log(`[AUTH-LOGIN] Authentication result: FAILED (Incorrect Password)`);
+      console.log('====================================================');
+      return res.status(401).json({ error: 'Incorrect password. Please try again.' });
+    }
+
+    // 4. Generate JWT Token
+    const token = jwt.sign(
+      { id: foundUser.id, email: foundUser.email },
+      process.env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '30d' }
+    );
+
+    console.log(`[AUTH-LOGIN] Authentication result: SUCCESS (via ${authSource})`);
+    console.log('====================================================');
+
+    return res.json({
+      message: 'Login successful.',
+      token,
+      user: { id: foundUser.id, name: foundUser.name, email: foundUser.email },
+      storage: authSource,
+    });
   } catch (error) {
     console.error(`[AUTH-LOGIN] Exception: ${error.message}`);
     console.log(`[AUTH-LOGIN] Authentication result: FAILED (Server Error)`);
@@ -254,7 +230,7 @@ const handleLogin = async (req, res) => {
 
 // Endpoints
 router.post('/register', handleRegister);
-router.post('/signup', handleRegister); // Alias for /signup
+router.post('/signup', handleRegister);
 router.post('/login', handleLogin);
 
 module.exports = router;

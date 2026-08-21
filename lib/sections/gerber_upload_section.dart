@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:archive/archive.dart';
 import 'section_wrapper.dart';
 import 'quote_result_section.dart';
 import '../utils/gerber_parser.dart';
 import '../services/gerber_api_service.dart';
+import '../utils/gerber_drc_validator.dart';
 
 class GerberUploadSection extends StatefulWidget {
   const GerberUploadSection({super.key});
@@ -41,7 +43,7 @@ class _GerberUploadSectionState extends State<GerberUploadSection> {
     Future<GerberParseResult?> parseTask = GerberApiService.uploadGerber(fileName, bytes);
 
     for (int i = 0; i <= 100; i += 2) {
-      await Future.delayed(const Duration(milliseconds: 80));
+      await Future.delayed(const Duration(milliseconds: 30));
       if (!mounted) return;
       setState(() {
         _analyzeProgress = i / 100.0;
@@ -57,6 +59,7 @@ class _GerberUploadSectionState extends State<GerberUploadSection> {
     }
 
     if (!mounted) return;
+
     setState(() {
       _analyzing = false;
       if (error != null) {
@@ -67,6 +70,246 @@ class _GerberUploadSectionState extends State<GerberUploadSection> {
         _quoteKey = UniqueKey();
       }
     });
+  }
+
+  // ── DRC Rejection Dialog ─────────────────────────────────────────────────
+
+  void _showDrcRejectionDialog(List<DrcFailure> failures) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF13131A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 560, maxHeight: 680),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: const Color(0xFFFF4D4D).withOpacity(0.35),
+              width: 1.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFF4D4D).withOpacity(0.15),
+                blurRadius: 40,
+                spreadRadius: 4,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ── Header ─────────────────────────────────────────────────
+              Container(
+                padding: const EdgeInsets.fromLTRB(28, 24, 28, 20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF4D4D).withOpacity(0.08),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF4D4D).withOpacity(0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.cancel_outlined,
+                        color: Color(0xFFFF4D4D),
+                        size: 26,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Gerber File Rejected',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          SizedBox(height: 3),
+                          Text(
+                            'Design Rule Check failed',
+                            style: TextStyle(
+                              color: Color(0xFFFF4D4D),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── Message ────────────────────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(28, 16, 28, 0),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.03),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: Colors.white.withOpacity(0.07)),
+                  ),
+                  child: const Text(
+                    'The uploaded PCB design does not meet the supported '
+                    'manufacturing specifications. Please correct the following '
+                    'issues before uploading again.',
+                    style: TextStyle(
+                        color: Color(0xFFB0B0C0),
+                        fontSize: 13,
+                        height: 1.55),
+                  ),
+                ),
+              ),
+
+              // ── Failed validation report ───────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(28, 14, 28, 0),
+                child: Row(
+                  children: [
+                    const Icon(Icons.rule_folder_outlined,
+                        size: 15, color: Color(0xFF8B8B9E)),
+                    const SizedBox(width: 6),
+                    Text(
+                      'FAILED VALIDATION REPORT  (${failures.length} issue${failures.length == 1 ? '' : 's'})',
+                      style: const TextStyle(
+                        color: Color(0xFF8B8B9E),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── Scrollable failure list ────────────────────────────────
+              Flexible(
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(28, 10, 28, 0),
+                    shrinkWrap: true,
+                    itemCount: failures.length,
+                    separatorBuilder: (_, __) =>
+                        const SizedBox(height: 10),
+                    itemBuilder: (_, i) =>
+                        _buildDrcFailureTile(failures[i]),
+                  ),
+                ),
+              ),
+
+              // ── Footer button ──────────────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(28, 20, 28, 24),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF4D4D),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                      elevation: 0,
+                    ),
+                    child: const Text(
+                      'Got it — Upload a corrected file',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w700, fontSize: 14),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDrcFailureTile(DrcFailure failure) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF4D4D).withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: const Color(0xFFFF4D4D).withOpacity(0.22),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Feature name
+          Row(
+            children: [
+              const Text('❌', style: TextStyle(fontSize: 14)),
+              const SizedBox(width: 8),
+              Text(
+                failure.featureName,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Detected / Required / Reason rows
+          _drcRow('Detected', failure.detectedValue,
+              const Color(0xFFFF8080)),
+          const SizedBox(height: 4),
+          _drcRow('Required', failure.requiredValue,
+              const Color(0xFF00E5FF)),
+          const SizedBox(height: 4),
+          _drcRow('Reason', failure.reason, const Color(0xFFB0B0C0)),
+        ],
+      ),
+    );
+  }
+
+  Widget _drcRow(String label, String value, Color valueColor) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 68,
+          child: Text(
+            '$label:',
+            style: const TextStyle(
+                color: Color(0xFF6B6B80),
+                fontSize: 12,
+                fontWeight: FontWeight.w600),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+                color: valueColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -263,16 +506,33 @@ class _GerberUploadSectionState extends State<GerberUploadSection> {
             ElevatedButton.icon(
               onPressed: () async {
                 FilePickerResult? result = await FilePicker.pickFiles(
-                  type: FileType.custom,
-                  allowedExtensions: ['zip', 'rar'],
+                  allowMultiple: true,
                   withData: true,
                 );
                 if (!context.mounted) return;
-                if (result != null && result.files.single.bytes != null) {
-                  await _analyzeFile(
-                    result.files.single.name,
-                    result.files.single.bytes!.toList(),
-                  );
+                if (result != null && result.files.isNotEmpty) {
+                  final firstFile = result.files.first;
+                  if (result.files.length == 1 && firstFile.bytes != null && (firstFile.name.toLowerCase().endsWith('.zip') || firstFile.name.toLowerCase().endsWith('.rar'))) {
+                    await _analyzeFile(
+                      firstFile.name,
+                      firstFile.bytes!.toList(),
+                    );
+                  } else {
+                    // Combine individual files into virtual Gerber collection
+                    final archive = Archive();
+                    for (final f in result.files) {
+                      if (f.bytes != null) {
+                        archive.addFile(ArchiveFile(f.name, f.bytes!.length, f.bytes!.toList()));
+                      }
+                    }
+                    final zipBytes = ZipEncoder().encode(archive);
+                    if (zipBytes != null) {
+                      await _analyzeFile(
+                        'Uploaded_Gerber_Set.zip',
+                        zipBytes,
+                      );
+                    }
+                  }
                 } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(

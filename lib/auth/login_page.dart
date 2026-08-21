@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:ui';
 import 'signup_page.dart';
 import 'auth_service.dart';
+
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -13,12 +14,80 @@ class _LoginPageState extends State<LoginPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _isLoading = false;
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  void _showSnackBar(String message, {bool isError = true}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? Icons.error_outline : Icons.check_circle_outline,
+              color: Colors.white,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: isError ? Colors.redAccent.shade700 : Colors.teal.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: Duration(seconds: isError ? 4 : 2),
+      ),
+    );
+  }
+
+  Future<void> _handleLogin() async {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+
+    if (email.isEmpty || password.isEmpty) {
+      _showSnackBar('Please enter both email and password.');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final result = await AuthService.loginWithDetails(email, password);
+
+      if (!mounted) return;
+
+      if (result['success'] == true) {
+        _showSnackBar(
+          result['message'] ?? 'Logged in successfully!',
+          isError: false,
+        );
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      } else {
+        final errorMsg = result['error'] ?? 'Login failed. Please check your credentials and server connection.';
+        _showSnackBar(errorMsg, isError: true);
+      }
+    } catch (e) {
+      _showSnackBar('Unexpected login error: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
@@ -41,8 +110,8 @@ class _LoginPageState extends State<LoginPage> {
                 center: Alignment.topLeft,
                 radius: 1.5,
                 colors: [
-                  Color(0xFF003049), 
-                  Color(0xFF07070A), 
+                  Color(0xFF003049),
+                  Color(0xFF07070A),
                 ],
               ),
             ),
@@ -120,11 +189,11 @@ class _LoginPageState extends State<LoginPage> {
                           ),
                         ),
                         const SizedBox(height: 40),
-                        
                         _buildTextField(
                           controller: _emailController,
                           label: 'Email',
                           icon: Icons.email_outlined,
+                          enabled: !_isLoading,
                         ),
                         const SizedBox(height: 20),
                         _buildTextField(
@@ -133,6 +202,7 @@ class _LoginPageState extends State<LoginPage> {
                           icon: Icons.lock_outline,
                           isPassword: true,
                           obscureText: _obscurePassword,
+                          enabled: !_isLoading,
                           onToggleVisibility: () {
                             setState(() {
                               _obscurePassword = !_obscurePassword;
@@ -144,26 +214,7 @@ class _LoginPageState extends State<LoginPage> {
                           width: double.infinity,
                           height: 55,
                           child: ElevatedButton(
-                            onPressed: () async {
-                              if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Please enter email and password')),
-                                );
-                                return;
-                              }
-                              String? error = await AuthService.login(_emailController.text, _passwordController.text);
-                              if (!context.mounted) return;
-                              if (error == null) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Logged in successfully!')),
-                                );
-                                Navigator.of(context).popUntil((route) => route.isFirst);
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(error)),
-                                );
-                              }
-                            },
+                            onPressed: _isLoading ? null : _handleLogin,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.transparent,
                               shadowColor: Colors.transparent,
@@ -175,22 +226,34 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             child: Ink(
                               decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFF00E5FF), Color(0xFF0072FF)],
-                                ),
+                                gradient: _isLoading
+                                    ? null
+                                    : const LinearGradient(
+                                        colors: [Color(0xFF00E5FF), Color(0xFF0072FF)],
+                                      ),
+                                color: _isLoading ? Colors.white.withOpacity(0.1) : null,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Container(
                                 alignment: Alignment.center,
-                                child: const Text(
-                                  'SIGN IN',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                    letterSpacing: 1.2,
-                                    color: Colors.white,
-                                  ),
-                                ),
+                                child: _isLoading
+                                    ? const SizedBox(
+                                        height: 24,
+                                        width: 24,
+                                        child: CircularProgressIndicator(
+                                          color: Color(0xFF00E5FF),
+                                          strokeWidth: 2.5,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'SIGN IN',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          letterSpacing: 1.2,
+                                          color: Colors.white,
+                                        ),
+                                      ),
                               ),
                             ),
                           ),
@@ -204,12 +267,14 @@ class _LoginPageState extends State<LoginPage> {
                               style: TextStyle(color: Colors.white.withOpacity(0.6)),
                             ),
                             TextButton(
-                              onPressed: () {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(builder: (context) => const SignupPage()),
-                                );
-                              },
+                              onPressed: _isLoading
+                                  ? null
+                                  : () {
+                                      Navigator.pushReplacement(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const SignupPage()),
+                                      );
+                                    },
                               style: TextButton.styleFrom(
                                 padding: EdgeInsets.zero,
                                 minimumSize: Size.zero,
@@ -243,11 +308,13 @@ class _LoginPageState extends State<LoginPage> {
     required IconData icon,
     bool isPassword = false,
     bool obscureText = false,
+    bool enabled = true,
     VoidCallback? onToggleVisibility,
   }) {
     return TextField(
       controller: controller,
       obscureText: obscureText,
+      enabled: enabled,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
@@ -259,7 +326,7 @@ class _LoginPageState extends State<LoginPage> {
                   obscureText ? Icons.visibility_off : Icons.visibility,
                   color: Colors.white.withOpacity(0.6),
                 ),
-                onPressed: onToggleVisibility,
+                onPressed: enabled ? onToggleVisibility : null,
               )
             : null,
         filled: true,
@@ -275,6 +342,10 @@ class _LoginPageState extends State<LoginPage> {
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: Color(0xFF00E5FF)),
+        ),
+        disabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.05)),
         ),
       ),
     );

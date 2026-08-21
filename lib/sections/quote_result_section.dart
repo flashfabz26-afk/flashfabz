@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'dart:math' as math;
 import '../utils/gerber_parser.dart';
 import '../utils/gerber_renderer.dart';
+import '../utils/gerber_drc_validator.dart';
+import '../services/firebase_service.dart';
+import '../auth/auth_service.dart';
+
 class QuoteResultSection extends StatefulWidget {
   final String fileName;
   final GerberParseResult parseResult;
@@ -19,104 +24,254 @@ class QuoteResultSection extends StatefulWidget {
 }
 
 class _QuoteResultSectionState extends State<QuoteResultSection> {
-  int _pcbTabIndex = 0;
-  final Set<String> _hiddenViewerLayers = {};
+  // Navigation & Viewport State
+  double _zoom = 1.0;
+  Offset _pan = Offset.zero;
+  double _rotationAngle = 0.0; // In radians (0, pi/2, pi, 3pi/2)
+  bool _is3DMode = false;
+  bool _isFullscreen = false;
 
+  // Sidebar scroll controller
+  final ScrollController _sidebarScrollController = ScrollController();
+
+  // Render & Visibility State
+  final Set<String> _visibleLayers = {
+    'top_copper',
+    'bottom_copper',
+    'inner_copper',
+    'top_soldermask',
+    'bottom_soldermask',
+    'top_silkscreen',
+    'bottom_silkscreen',
+    'top_paste',
+    'bottom_paste',
+    'outline',
+    'drill'
+  };
+  String _selectedLayer = 'top_copper';
+  Color _maskColorVal = const Color(0xFF1B4D3E); // Substrate Green
+  String _maskColorName = 'Green';
+
+  // 3D rotation state
   double _rotY = 28 * math.pi / 180;
   double _tiltX = 32 * math.pi / 180;
 
+  // Grid & Snap State
+  String _units = 'mm'; // 'mm', 'mil', 'inch'
+  double _gridSpacing = 1.0; // in mm
+  bool _showGrid = true;
+  bool _snapToPad = true;
+  bool _snapToTrack = true;
+  bool _snapToDrill = true;
+  bool _snapToOutline = true;
+
+  // Measurement State
+  bool _measurementMode = false;
+  Offset? _measurementStart; // Gerber space
+  Offset? _measurementEnd;   // Gerber space
+  Offset _mouseHoverGerber = Offset.zero;
+
+  // DFM Configurable Rules & Report State
+  double _ruleBoardThickness = 1.6;
+  double _ruleCopperThicknessOz = 1.0;
+  double _ruleMinDrill = 0.50;
+  double _ruleMinTrackWidth = 0.2032; // 8 mil
+  double _ruleMinClearance = 0.2032;  // 8 mil
+  double _ruleMinAnnularRing = 0.15;
+  double _ruleMinCopperToEdge = 0.30;
+  
+  late DfmReport _dfmReport;
+  DfmViolation? _selectedViolation;
+
+  // Quotation Inputs
   late int _qty;
   late String _layers;
-  late String _boardType;
-  late String _discreteDesign;
   late String _pcbThickness;
   late String _copperThickness;
   late String _pcbFinish;
-  late String _maskColor;
-
-  String? _lineWidthError;
-  late TextEditingController _lineWidthController;
-
-  late int _randomSeed;
+  bool _isPlacingOrder = false;
 
   final List<int> _qtyOptions = [5, 10, 25, 50, 100, 200, 500, 1000];
-  final List<String> _layerOptions = ['1', '2', '4', '6', '8', '10', '12'];
-  final List<String> _boardTypeOptions = ['Single Piece', 'Panel by Manufacturer', 'Panel by Customer'];
-  final List<String> _discreteOptions = ['1 Design', '2 Designs', '3 Designs', '4 Designs'];
-  final List<String> _thicknessOptions = ['0.4 mm', '0.6 mm', '0.8 mm', '1.0 mm', '1.2 mm', '1.6 mm', '2.0 mm', '2.4 mm'];
+  final List<String> _layerOptions = ['1', '2', '4', '6', '8'];
+  final List<String> _thicknessOptions = ['0.6 mm', '0.8 mm', '1.0 mm', '1.2 mm', '1.6 mm', '2.0 mm'];
   final List<String> _copperOptions = ['1 oz / 35 µm', '2 oz / 70 µm', '3 oz / 105 µm'];
-  final List<String> _finishOptions = ['HASL (with lead)', 'HASL (lead free)', 'ENIG', 'OSP', 'Hard Gold', 'Immersion Silver', 'Immersion Tin'];
-  final List<String> _maskOptions = ['Green', 'Red', 'Blue', 'Black', 'White', 'Yellow', 'Purple', 'Matte Black', 'Matte Green'];
+  final List<String> _finishOptions = ['HASL (with lead)', 'HASL (lead free)', 'ENIG', 'OSP'];
+  final List<String> _maskOptions = ['Green', 'Red', 'Blue', 'Black', 'White', 'Yellow', 'Purple'];
 
   @override
   void initState() {
     super.initState();
-    _randomSeed = math.Random().nextInt(9999999);
-    _qty             = 10;
-    _layers          = widget.parseResult.layerCount.toString();
-    _boardType       = widget.parseResult.boardType;
-    _discreteDesign  = widget.parseResult.discreteDesign;
-    _pcbThickness    = widget.parseResult.pcbThickness;
+    _qty = 10;
+    _layers = widget.parseResult.layerCount.toString();
+    _pcbThickness = widget.parseResult.pcbThickness;
     _copperThickness = widget.parseResult.copperThickness;
-    _pcbFinish       = widget.parseResult.pcbFinish;
-    _maskColor       = widget.parseResult.solderMask;
+    _pcbFinish = widget.parseResult.pcbFinish;
+    _maskColorName = widget.parseResult.solderMask;
+
     if (!_layerOptions.contains(_layers)) _layers = '2';
     if (!_copperOptions.contains(_copperThickness)) _copperThickness = _copperOptions.first;
-    if (!_maskOptions.contains(_maskColor)) _maskColor = 'Green';
-    final initialWidth = widget.parseResult.minLineWidth.replaceAll(' mm', '');
-    _lineWidthController = TextEditingController(text: initialWidth);
-  }
+    _updateMaskColor(_maskColorName);
 
-  @override
-  void didUpdateWidget(QuoteResultSection oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.fileName != widget.fileName || oldWidget.parseResult != widget.parseResult) {
-      _randomSeed = math.Random().nextInt(9999999);
-      _qty             = 10;
-      _layers          = widget.parseResult.layerCount.toString();
-      _boardType       = widget.parseResult.boardType;
-      _discreteDesign  = widget.parseResult.discreteDesign;
-      _pcbThickness    = widget.parseResult.pcbThickness;
-      _copperThickness = widget.parseResult.copperThickness;
-      _pcbFinish       = widget.parseResult.pcbFinish;
-      _maskColor       = widget.parseResult.solderMask;
-      _lineWidthController.text = widget.parseResult.minLineWidth.replaceAll(' mm', '');
-      _rotY = 28 * math.pi / 180;
-      _tiltX = 32 * math.pi / 180;
-    }
+    _runDfm();
   }
 
   @override
   void dispose() {
-    _lineWidthController.dispose();
+    _sidebarScrollController.dispose();
     super.dispose();
   }
 
-  Color? get _maskTintColor {
-    switch (_maskColor.toLowerCase()) {
-      case 'green':        return const Color(0xFF1B4D3E);
-      case 'matte green':  return const Color(0xFF0F2A22);
-      case 'red':          return const Color(0xFF7A1C1C);
-      case 'blue':         return const Color(0xFF1C3D7A);
-      case 'black':        return const Color(0xFF111111);
-      case 'matte black':  return const Color(0xFF222222);
-      case 'white':        return const Color(0xFFEEEEEE);
-      case 'yellow':       return const Color(0xFF8A731C);
-      case 'purple':       return const Color(0xFF5A1C7A);
-      default:             return null;
+  void _updateMaskColor(String colorName) {
+    _maskColorName = colorName;
+    switch (colorName.toLowerCase()) {
+      case 'green':
+        _maskColorVal = const Color(0xFF0F2F1D);
+        break;
+      case 'red':
+        _maskColorVal = const Color(0xFF4A0A0A);
+        break;
+      case 'blue':
+        _maskColorVal = const Color(0xFF0A2240);
+        break;
+      case 'black':
+        _maskColorVal = const Color(0xFF111113);
+        break;
+      case 'white':
+        _maskColorVal = const Color(0xFFE2E2E6);
+        break;
+      case 'yellow':
+        _maskColorVal = const Color(0xFF4A3F0A);
+        break;
+      case 'purple':
+        _maskColorVal = const Color(0xFF2F0A3F);
+        break;
     }
   }
 
-  BlendMode? get _maskBlendMode => _maskTintColor != null ? BlendMode.color : null;
+  void _runDfm() {
+    final rules = DfmRules(
+      boardThickness: _ruleBoardThickness,
+      copperThicknessOz: _ruleCopperThicknessOz,
+      minDrillSize: _ruleMinDrill,
+      minTrackWidth: _ruleMinTrackWidth,
+      minClearance: _ruleMinClearance,
+      minAnnularRing: _ruleMinAnnularRing,
+      minCopperToEdge: _ruleMinCopperToEdge,
+    );
+    setState(() {
+      _dfmReport = GerberDrcValidator.runDfm(widget.parseResult, rules);
+    });
+  }
+
+  // Centering & Zoom to Coordinates
+  void _centerOnGerberCoordinate(Offset target, Size viewPortSize) {
+    final bbox = widget.parseResult.topLayer?.bbox ?? const Rect.fromLTWH(0, 0, 100, 80);
+    if (bbox.width <= 0 || bbox.height <= 0) return;
+
+    const margin = 24.0;
+    final double baseScale = math.min(
+      (viewPortSize.width - margin * 2) / bbox.width,
+      (viewPortSize.height - margin * 2) / bbox.height,
+    );
+
+    final gerberCenter = bbox.center;
+
+    final double dx = target.dx - gerberCenter.dx;
+    final double dy = -(target.dy - gerberCenter.dy); // inverted Y axis
+
+    setState(() {
+      _pan = Offset(-dx * baseScale * _zoom, -dy * baseScale * _zoom);
+    });
+  }
 
   int get _currentUnitPrice {
-    final layers = int.tryParse(_layers) ?? widget.parseResult.layerCount;
+    final layersInt = int.tryParse(_layers) ?? widget.parseResult.layerCount;
     final base = widget.parseResult.unitPrice;
-    final multiplier = layers / math.max(widget.parseResult.layerCount, 1);
+    final multiplier = layersInt / math.max(widget.parseResult.layerCount, 1);
     return math.max((base * multiplier).round(), 80);
   }
 
   int get _currentTotalPrice => _currentUnitPrice * _qty;
+
+  // Snapping logic
+  Offset _findSnapPoint(Offset rawPt) {
+    if (!_snapToPad && !_snapToTrack && !_snapToDrill && !_snapToOutline) {
+      return rawPt;
+    }
+    
+    double bestDist = 1.0; // snap distance threshold in mm
+    Offset snapPt = rawPt;
+
+    if (_snapToDrill) {
+      for (final drill in widget.parseResult.drills) {
+        final d = (rawPt - drill.center).distance;
+        if (d < bestDist) {
+          bestDist = d;
+          snapPt = drill.center;
+        }
+      }
+    }
+
+    if (_snapToPad) {
+      final copperLayers = [widget.parseResult.topCopper, widget.parseResult.bottomCopper];
+      for (final cl in copperLayers) {
+        if (cl == null) continue;
+        for (final pad in cl.pads) {
+          final d = (rawPt - pad.center).distance;
+          if (d < bestDist) {
+            bestDist = d;
+            snapPt = pad.center;
+          }
+        }
+      }
+    }
+
+    if (_snapToTrack) {
+      final copperLayers = [widget.parseResult.topCopper, widget.parseResult.bottomCopper];
+      for (final cl in copperLayers) {
+        if (cl == null) continue;
+        for (final t in cl.traces) {
+          final dStart = (rawPt - t.start).distance;
+          if (dStart < bestDist) {
+            bestDist = dStart;
+            snapPt = t.start;
+          }
+          final dEnd = (rawPt - t.end).distance;
+          if (dEnd < bestDist) {
+            bestDist = dEnd;
+            snapPt = t.end;
+          }
+        }
+      }
+    }
+
+    if (_snapToOutline && widget.parseResult.boardOutline != null) {
+      for (final t in widget.parseResult.boardOutline!.traces) {
+        final dStart = (rawPt - t.start).distance;
+        if (dStart < bestDist) {
+          bestDist = dStart;
+          snapPt = t.start;
+        }
+        final dEnd = (rawPt - t.end).distance;
+        if (dEnd < bestDist) {
+          bestDist = dEnd;
+          snapPt = t.end;
+        }
+      }
+    }
+
+    return snapPt;
+  }
+
+  // Units Display helper
+  String _formatValue(double valueMm) {
+    if (_units == 'mil') {
+      return '${(valueMm * 39.3701).toStringAsFixed(1)} mil';
+    } else if (_units == 'inch') {
+      return '${(valueMm * 0.0393701).toStringAsFixed(4)} in';
+    }
+    return '${valueMm.toStringAsFixed(3)} mm';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -124,662 +279,1057 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildHeader(),
-        const SizedBox(height: 24),
-        _buildTopRow(context),
-        const SizedBox(height: 24),
-        _buildPCBSection(context),
-      ],
-    );
-  }
-
-  Widget _buildHeader() {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF00E5FF).withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
-          ),
-          child: const Icon(Icons.check_circle, color: Color(0xFF00E5FF), size: 28),
-        ),
-        const SizedBox(width: 16),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Gerber Analysis Complete', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white)),
-            Text(widget.fileName, style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 13)),
-          ],
-        ),
-        const Spacer(),
-        ElevatedButton.icon(
-          onPressed: widget.onUploadNewFile,
-          icon: const Icon(Icons.upload_file, size: 16),
-          label: const Text('Upload Another', style: TextStyle(fontWeight: FontWeight.bold)),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.white.withOpacity(0.1),
-            foregroundColor: Colors.white,
-            elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-        ),
-        const SizedBox(width: 12),
-        _buildStatusBadge('READY TO ORDER', const Color(0xFF69FF47)),
-      ],
-    );
-  }
-
-  Widget _buildStatusBadge(String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.4)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-          const SizedBox(width: 8),
-          Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPCBSpecsCard(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: const Color(0xFF13131A),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.2), width: 1.5),
-        boxShadow: [BoxShadow(color: const Color(0xFF00E5FF).withOpacity(0.06), blurRadius: 30, offset: const Offset(0, 8))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [const Color(0xFF00E5FF).withOpacity(0.12), const Color(0xFF0072FF).withOpacity(0.06)]),
-              borderRadius: const BorderRadius.only(topLeft: Radius.circular(20), topRight: Radius.circular(20)),
-              border: Border(bottom: BorderSide(color: const Color(0xFF00E5FF).withOpacity(0.15))),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(color: const Color(0xFF00E5FF).withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.developer_board, color: Color(0xFF00E5FF), size: 20),
-                ),
-                const SizedBox(width: 12),
-                const Text('PCB SPECIFICATIONS', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 14, fontWeight: FontWeight.w900, letterSpacing: 2.5)),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF69FF47).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: const Color(0xFF69FF47).withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    children: const [
-                      Icon(Icons.auto_awesome, color: Color(0xFF69FF47), size: 13),
-                      SizedBox(width: 5),
-                      Text('Auto-detected from Gerber', style: TextStyle(color: Color(0xFF69FF47), fontSize: 11, fontWeight: FontWeight.w700)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final specs = _buildSpecFields();
-                final isWide = constraints.maxWidth > 700;
-                final cols = isWide ? 3 : 2;
-                final gap = isWide ? 16.0 : 12.0;
-                final rows = <Widget>[];
-                for (int i = 0; i < specs.length; i += cols) {
-                  final rowChildren = <Widget>[];
-                  for (int c = 0; c < cols; c++) {
-                    if (c > 0) rowChildren.add(SizedBox(width: gap));
-                    rowChildren.add(Expanded(child: i + c < specs.length ? specs[i + c] : const SizedBox()));
-                  }
-                  rows.add(Row(crossAxisAlignment: CrossAxisAlignment.start, children: rowChildren));
-                  if (i + cols < specs.length) rows.add(SizedBox(height: gap));
-                }
-                return Column(children: rows);
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  List<Widget> _buildSpecFields() {
-    return [
-      _specDropdown<int>(label: 'PCB Qty', icon: Icons.inventory_2_outlined, iconColor: const Color(0xFF00E5FF),
-        value: _qty, items: _qtyOptions, displayFn: (v) => '$v pcs', onChanged: (v) => setState(() => _qty = v!), isDetected: false),
-      _specDropdown<String>(label: 'Layers', icon: Icons.layers_outlined, iconColor: const Color(0xFFBB86FC),
-        value: _layers, items: _layerOptions, displayFn: (v) => '$v Layer${int.parse(v) > 1 ? 's' : ''}',
-        onChanged: (v) => setState(() => _layers = v!), isDetected: true),
-      _specInfoField(label: 'Board Dimensions', icon: Icons.straighten_outlined, iconColor: const Color(0xFFFFD54F),
-        value: widget.parseResult.dimensions, isDetected: true),
-      _specDropdown<String>(label: 'Discrete Design', icon: Icons.grid_view_outlined, iconColor: const Color(0xFF69FF47),
-        value: _discreteDesign, items: _discreteOptions, displayFn: (v) => v,
-        onChanged: (v) => setState(() => _discreteDesign = v!), isDetected: false),
-      _specDropdown<String>(label: 'Board Type', icon: Icons.developer_board_outlined, iconColor: const Color(0xFFFF7043),
-        value: _boardType, items: _boardTypeOptions, displayFn: (v) => v,
-        onChanged: (v) => setState(() => _boardType = v!), isDetected: false),
-      _specDropdown<String>(label: 'PCB Thickness', icon: Icons.height_outlined, iconColor: const Color(0xFF26C6DA),
-        value: _pcbThickness, items: _thicknessOptions, displayFn: (v) => v,
-        onChanged: (v) => setState(() => _pcbThickness = v!), isDetected: false),
-      _specDropdown<String>(label: 'Copper Thickness', icon: Icons.electrical_services_outlined, iconColor: const Color(0xFFFFD54F),
-        value: _copperThickness, items: _copperOptions, displayFn: (v) => v,
-        onChanged: (v) => setState(() => _copperThickness = v!), isDetected: true),
-      _specDropdown<String>(label: 'PCB Finish', icon: Icons.auto_fix_high_outlined, iconColor: const Color(0xFFBB86FC),
-        value: _pcbFinish, items: _finishOptions, displayFn: (v) => v,
-        onChanged: (v) => setState(() => _pcbFinish = v!), isDetected: false),
-      _specDropdown<String>(label: 'Mask Color', icon: Icons.color_lens_outlined, iconColor: _maskColorValue(_maskColor),
-        value: _maskColor, items: _maskOptions, displayFn: (v) => v,
-        onChanged: (v) => setState(() => _maskColor = v!), isDetected: false, showColorDot: true),
-      _specLineWidthField(),
-    ];
-  }
-
-  Color _maskColorValue(String color) {
-    switch (color.toLowerCase()) {
-      case 'green': case 'matte green': return Colors.green;
-      case 'red':   return Colors.red;
-      case 'blue':  return Colors.blue;
-      case 'black': case 'matte black': return Colors.grey.shade700;
-      case 'white': return Colors.white;
-      case 'yellow': return Colors.amber;
-      case 'purple': return Colors.purple;
-      default:      return const Color(0xFF00E5FF);
-    }
-  }
-
-  Widget _specDropdown<T>({
-    required String label, required IconData icon, required Color iconColor,
-    required T value, required List<T> items, required String Function(T) displayFn,
-    required ValueChanged<T?> onChanged, required bool isDetected, bool showColorDot = false,
-  }) {
-    return _specFieldContainer(
-      label: label, icon: icon, iconColor: iconColor, isDetected: isDetected,
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value, isExpanded: true,
-          dropdownColor: const Color(0xFF1E1E2A),
-          icon: const Icon(Icons.expand_more, color: Color(0xFF8B8B9E), size: 18),
-          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
-          items: items.map((item) {
-            return DropdownMenuItem<T>(
-              value: item,
-              child: Row(
+        const SizedBox(height: 20),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final isWide = constraints.maxWidth > 1150;
+            const double viewerHeight = 720.0;
+            if (isWide) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (showColorDot) ...[
-                    Container(
-                      width: 10, height: 10,
-                      decoration: BoxDecoration(
-                        color: _maskColorValue(item.toString()), shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white24),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  Flexible(child: Text(displayFn(item), style: const TextStyle(color: Colors.white, fontSize: 13), overflow: TextOverflow.ellipsis)),
-                ],
-              ),
-            );
-          }).toList(),
-          onChanged: onChanged,
-        ),
-      ),
-    );
-  }
-
-  Widget _specInfoField({required String label, required IconData icon, required Color iconColor, required String value, required bool isDetected}) {
-    return _specFieldContainer(
-      label: label, icon: icon, iconColor: iconColor, isDetected: isDetected,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Text(value, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
-      ),
-    );
-  }
-
-  Widget _specLineWidthField() {
-    return _specFieldContainer(
-      label: 'Min Line Width', icon: Icons.linear_scale_outlined, iconColor: const Color(0xFFFF7043), isDetected: true,
-      child: TextField(
-        controller: _lineWidthController,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
-        decoration: InputDecoration(
-          isDense: true,
-          suffixText: 'mm',
-          suffixStyle: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 12),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-          errorText: _lineWidthError, errorMaxLines: 2,
-          errorStyle: const TextStyle(fontSize: 10, color: Colors.redAccent, height: 1.2),
-          filled: true, fillColor: Colors.white12,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF00E5FF), width: 1.5)),
-        ),
-        onChanged: (v) {
-          final parsed = double.tryParse(v);
-          setState(() { _lineWidthError = (parsed == null || parsed < 0.10) ? 'Min allowed is 0.10 mm' : null; });
-        },
-      ),
-    );
-  }
-
-  Widget _specFieldContainer({required String label, required IconData icon, required Color iconColor, required bool isDetected, required Widget child}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D0D14),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: isDetected ? const Color(0xFF00E5FF).withOpacity(0.2) : Colors.white.withOpacity(0.07)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: iconColor, size: 14),
-              const SizedBox(width: 6),
-              Expanded(child: Text(label, style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.5))),
-              if (isDetected)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                  decoration: BoxDecoration(color: const Color(0xFF00E5FF).withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                  child: const Text('AUTO', style: TextStyle(color: Color(0xFF00E5FF), fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 0.8)),
-                ),
-            ],
-          ),
-          child,
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTopRow(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isWide = constraints.maxWidth > 700;
-        return isWide
-            ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: _buildQuotationCard(context)),
-                const SizedBox(width: 24),
-                Expanded(child: _buildProjectDetailsCard(context)),
-              ])
-            : Column(children: [
-                _buildQuotationCard(context),
-                const SizedBox(height: 24),
-                _buildProjectDetailsCard(context),
-              ]);
-      },
-    );
-  }
-
-  Widget _buildQuotationCard(BuildContext context) {
-    return _glassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _cardTitle(Icons.receipt_long, 'QUOTATION', const Color(0xFF00E5FF)),
-          const SizedBox(height: 20),
-          _quoteRow('Unit Price', '₹ $_currentUnitPrice', highlight: false),
-          _divider(),
-          _quoteRow('Quantity', '$_qty pcs', highlight: false),
-          _divider(),
-          _quoteRow('PCB Thickness', _pcbThickness, highlight: false),
-          _divider(),
-          _quoteRow('Surface Finish', _pcbFinish, highlight: false),
-          _divider(),
-          _quoteRow('Delivery', '3-5 Days', highlight: false),
-          _divider(),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF00E5FF), Color(0xFF0072FF)]), borderRadius: BorderRadius.circular(12)),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('TOTAL', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1.5)),
-                Text('₹ $_currentTotalPrice', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 22)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {},
-              icon: const Icon(Icons.shopping_cart_outlined, color: Colors.black),
-              label: const Text('Place Order', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 15)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF00E5FF),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _quoteRow(String label, String value, {required bool highlight}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 14)),
-          Text(value, style: TextStyle(color: highlight ? const Color(0xFF00E5FF) : Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildProjectDetailsCard(BuildContext context) {
-    final layersText = '$_layers Layer${(int.tryParse(_layers) ?? 2) > 1 ? 's' : ''}';
-    return _glassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _cardTitle(Icons.info_outline, 'PROJECT DETAILS', const Color(0xFFFFD54F)),
-          const SizedBox(height: 20),
-          _detailItem('File Name', widget.fileName, Icons.folder_zip_outlined),
-          _detailItem('Board Dimensions', widget.parseResult.dimensions, Icons.straighten),
-          _detailItem('Layers', layersText, Icons.layers),
-          _detailItem('Copper Thickness', _copperThickness, Icons.electrical_services),
-          _detailItem('Line Width', widget.parseResult.minLineWidth, Icons.linear_scale),
-          _detailItem('Line to Line Gap', widget.parseResult.minTraceSpace, Icons.space_bar_outlined),
-          _detailItem('Drill Size', widget.parseResult.minHoleSize, Icons.circle_outlined),
-          _detailItem('Board Material', widget.parseResult.material, Icons.inventory_2_outlined),
-          _detailItem('Solder Mask', _maskColor, Icons.color_lens_outlined),
-          const SizedBox(height: 16),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFF69FF47).withOpacity(0.07),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFF69FF47).withOpacity(0.2)),
-            ),
-            child: Row(
-              children: const [
-                Icon(Icons.verified_outlined, color: Color(0xFF69FF47), size: 20),
-                SizedBox(width: 10),
-                Expanded(child: Text('DRC Passed — No design rule violations detected.', style: TextStyle(color: Color(0xFF69FF47), fontSize: 13, fontWeight: FontWeight.w600))),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _detailItem(String label, String value, IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Icon(icon, color: const Color(0xFFFFD54F), size: 18),
-          const SizedBox(width: 12),
-          Expanded(child: Text(label, style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 13))),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPCBSection(BuildContext context) {
-    return _glassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _cardTitle(Icons.developer_board, 'PCB PREVIEW', const Color(0xFFBB86FC)),
-          const SizedBox(height: 16),
-          _buildDetectedLayersRow(),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              const Icon(Icons.layers, color: Colors.white54, size: 20),
-              const SizedBox(width: 8),
-              const Text('LAYER VISIBILITY', style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600)),
-              const Spacer(),
-              _buildLayerToggles(),
-            ],
-          ),
-          const SizedBox(height: 24),
-          const Text('3D INTERACTIVE VIEWER', style: TextStyle(color: Color(0xFFBB86FC), fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-          const SizedBox(height: 12),
-          _buildViewerTab(),
-          const SizedBox(height: 32),
-          const Text('2D LAYER PREVIEWS', style: TextStyle(color: Color(0xFFBB86FC), fontSize: 14, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
-          const SizedBox(height: 12),
-          _buildImagesTab(),
-        ],
-      ),
-    );
-  }
-Widget _buildDetectedLayersRow() {
-    final top = widget.parseResult.topLayer;
-    final bot = widget.parseResult.bottomLayer;
-    final hasTopCopper   = top != null && (top.traces.isNotEmpty  || top.pads.isNotEmpty);
-    final hasBotCopper   = bot != null && (bot.traces.isNotEmpty  || bot.pads.isNotEmpty);
-    final hasOutline     = (top?.outline.isNotEmpty ?? false) || (bot?.outline.isNotEmpty ?? false);
-    final hasDrills      = (top?.drills.isNotEmpty  ?? false);
-    final hasTopSilk     = top != null && top.silkscreen.isNotEmpty;
-    final hasBotSilk     = bot != null && bot.silkscreen.isNotEmpty;
-    final hasTopMask     = top != null && (top.soldermaskPads.isNotEmpty || top.soldermaskTraces.isNotEmpty);
-    final hasBotMask     = bot != null && (bot.soldermaskPads.isNotEmpty || bot.soldermaskTraces.isNotEmpty);
-
-    Widget chip(String label, bool detected) {
-      return Container(
-        margin: const EdgeInsets.only(right: 6, bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-        decoration: BoxDecoration(
-          color: detected ? const Color(0xFF00E5FF).withOpacity(0.1) : Colors.white.withOpacity(0.03),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: detected ? const Color(0xFF00E5FF).withOpacity(0.4) : Colors.white.withOpacity(0.06)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(detected ? Icons.check_circle : Icons.radio_button_unchecked,
-                size: 10, color: detected ? const Color(0xFF00E5FF) : Colors.white24),
-            const SizedBox(width: 5),
-            Text(label,
-                style: TextStyle(
-                    color: detected ? Colors.white70 : Colors.white24,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600)),
-          ],
-        ),
-      );
-    }
-
-    return Wrap(
-      children: [
-        chip('Top Copper',    hasTopCopper),
-        chip('Bottom Copper', hasBotCopper),
-        chip('Top Mask',      hasTopMask),
-        chip('Bottom Mask',   hasBotMask),
-        chip('Top Silk',      hasTopSilk),
-        chip('Bottom Silk',   hasBotSilk),
-        chip('Outline',       hasOutline),
-        chip('Drills',        hasDrills),
-      ],
-    );
-  }
-  Widget _buildLayerToggles() {
-    final layers = [
-      {'label': 'copper',   'key': 'Top.copper'},
-      {'label': 'mask',     'key': 'Top.soldermask'},
-      {'label': 'silk',     'key': 'Top.silkscreen'},
-      {'label': 'drill',    'key': 'All.drill'},
-      {'label': 'outline',  'key': 'All.outline'},
-    ];
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: layers.map((l) {
-        final layerKey = l['key']!;
-        final label    = l['label']!;
-        final hidden = _hiddenViewerLayers.contains(layerKey);
-        return GestureDetector(
-          onTap: () => setState(() {
-            if (hidden) _hiddenViewerLayers.remove(layerKey);
-            else _hiddenViewerLayers.add(layerKey);
-          }),
-          child: Container(
-            margin: const EdgeInsets.only(right: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: hidden ? Colors.transparent : const Color(0xFFBB86FC).withOpacity(0.12),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                  color: hidden ? Colors.white12 : const Color(0xFFBB86FC).withOpacity(0.5)),
-            ),
-            child: Text(label,
-                style: TextStyle(
-                    color: hidden ? Colors.white24 : const Color(0xFFBB86FC),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700)),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _pcbTab(String label, IconData icon, int index) {
-    final active = _pcbTabIndex == index;
-    return GestureDetector(
-      onTap: () => setState(() => _pcbTabIndex = index),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFFBB86FC).withOpacity(0.15) : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: active ? const Color(0xFFBB86FC) : Colors.white.withOpacity(0.08), width: active ? 1.5 : 1),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 16, color: active ? const Color(0xFFBB86FC) : Colors.white54),
-            const SizedBox(width: 8),
-            Text(label, style: TextStyle(color: active ? const Color(0xFFBB86FC) : Colors.white54, fontWeight: active ? FontWeight.w700 : FontWeight.w500, fontSize: 14)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildImagesTab() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        _buildCompositeView('Top',    widget.parseResult.topImageUrl,    widget.parseResult.topLayer),
-        const SizedBox(height: 32),
-        _buildCompositeView('Bottom', widget.parseResult.bottomImageUrl, widget.parseResult.bottomLayer),
-      ],
-    );
-  }
-
-  Widget _buildCompositeView(String title, String? imageUrl, PCBLayerData? layerData) {
-    return Column(
-      children: [
-        Container(
-          width: double.infinity, height: 380,
-          decoration: BoxDecoration(color: const Color(0xFF0F1218), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white.withOpacity(0.06))),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Stack(
-              children: [
-                if (imageUrl != null)
-                  Positioned.fill(
-                    child: InteractiveViewer(
-                      minScale: 0.5, maxScale: 4.0,
-                      child: Image.network(
-                        imageUrl,
-                        key: ValueKey(imageUrl),
-                        fit: BoxFit.contain,
-                        loadingBuilder: (context, child, progress) {
-                          if (progress == null) return child;
-                          return const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)));
-                        },
-                      ),
-                    ),
-                  ),
-                if (imageUrl == null && layerData != null && layerData.bbox.width > 0)
-                  Positioned.fill(
-                    child: InteractiveViewer(
-                      minScale: 0.5,
-                      maxScale: 10.0,
-                      child: CustomPaint(
-                        painter: GerberPCBPainter(
-                          layerData: layerData,
-                          maskColor: _maskTintColor ?? const Color(0xFF1B4D3E),
-                          isTop: title == 'Top',
-                          hiddenLayers: _hiddenViewerLayers,
+                  SizedBox(
+                    width: 380,
+                    height: viewerHeight,
+                    child: Listener(
+                      onPointerSignal: (event) {
+                        if (event is PointerScrollEvent) {
+                          final newOffset = (_sidebarScrollController.offset + event.scrollDelta.dy)
+                              .clamp(0.0, _sidebarScrollController.position.maxScrollExtent);
+                          _sidebarScrollController.jumpTo(newOffset);
+                        }
+                      },
+                      child: Scrollbar(
+                        controller: _sidebarScrollController,
+                        thumbVisibility: true,
+                        child: SingleChildScrollView(
+                          controller: _sidebarScrollController,
+                          padding: const EdgeInsets.only(right: 8),
+                          child: _buildSidebar(context),
                         ),
                       ),
                     ),
                   ),
-                if (imageUrl == null && (layerData == null || layerData.bbox.width <= 0))
+                  const SizedBox(width: 20),
+                  Expanded(
+                    child: _buildViewerContainer(context, const Size(700, viewerHeight)),
+                  ),
+                ],
+              );
+            } else {
+              return Column(
+                children: [
+                  _buildSidebar(context),
+                  const SizedBox(height: 20),
+                  _buildViewerContainer(context, const Size(600, 500)),
+                ],
+              );
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  // Header Component
+  Widget _buildHeader() {
+    final overallPassed = _dfmReport.passed;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF13131A),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.04)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: overallPassed 
+                  ? const Color(0xFF00E676).withOpacity(0.1) 
+                  : const Color(0xFFFF3D00).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              overallPassed ? Icons.check_circle_outline : Icons.report_problem_outlined,
+              color: overallPassed ? const Color(0xFF00E676) : const Color(0xFFFF3D00),
+              size: 26,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'PCB Inspection & Quotation Dashboard',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(width: 12),
+                    _buildPill(
+                      overallPassed ? 'PASS' : 'REJECTED',
+                      overallPassed ? const Color(0xFF00E676) : const Color(0xFFFF3D00),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  widget.fileName,
+                  style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 12, fontFamily: 'monospace'),
+                ),
+              ],
+            ),
+          ),
+          ElevatedButton.icon(
+            onPressed: widget.onUploadNewFile,
+            icon: const Icon(Icons.upload_file, size: 16),
+            label: const Text('Upload New', style: TextStyle(fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.white.withOpacity(0.06),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Left Sidebar Component
+  Widget _buildSidebar(BuildContext context) {
+    return Column(
+      children: [
+        _buildPcbInfoCard(),
+        const SizedBox(height: 14),
+        _buildQuotationCard(context),
+        const SizedBox(height: 14),
+        _buildDfmSummaryCard(),
+        const SizedBox(height: 14),
+        _buildLayerCard(),
+        const SizedBox(height: 14),
+        _buildInspectionSettingsCard(),
+      ],
+    );
+  }
+
+  // 1. Quotation & Order Card
+  Widget _buildQuotationCard(BuildContext context) {
+    return _sidebarCard(
+      title: 'QUOTATION & ORDER',
+      icon: Icons.shopping_cart_outlined,
+      iconColor: const Color(0xFF00E5FF),
+      child: Column(
+        children: [
+          _quoteRow('Layers', _layers, items: _layerOptions, onChanged: (v) {
+            setState(() => _layers = v!);
+          }),
+          _quoteRow('Thickness', _pcbThickness, items: _thicknessOptions, onChanged: (v) {
+            setState(() => _pcbThickness = v!);
+            final thkVal = double.tryParse(v!.replaceAll(' mm', ''));
+            if (thkVal != null) {
+              setState(() {
+                _ruleBoardThickness = thkVal;
+                _runDfm();
+              });
+            }
+          }),
+          _quoteRow('Copper Weight', _copperThickness, items: _copperOptions, onChanged: (v) {
+            setState(() => _copperThickness = v!);
+            final ozVal = double.tryParse(v!.split(' ').first);
+            if (ozVal != null) {
+              setState(() {
+                _ruleCopperThicknessOz = ozVal;
+                _runDfm();
+              });
+            }
+          }),
+          _quoteRow('Surface Finish', _pcbFinish, items: _finishOptions, onChanged: (v) {
+            setState(() => _pcbFinish = v!);
+          }),
+          _quoteRow('Solder Mask', _maskColorName, items: _maskOptions, onChanged: (v) {
+            setState(() {
+              _updateMaskColor(v!);
+            });
+          }),
+          _quoteRow('Quantity', '$_qty pcs', items: _qtyOptions.map((e) => '$e pcs').toList(), onChanged: (v) {
+            setState(() {
+              _qty = int.parse(v!.replaceAll(' pcs', ''));
+            });
+          }),
+          const SizedBox(height: 10),
+          const Divider(color: Colors.white10),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Est. Price:', style: TextStyle(color: Color(0xFF8B8B9E), fontSize: 13)),
+                Text(
+                  '₹ $_currentTotalPrice',
+                  style: const TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold, fontSize: 20),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _isPlacingOrder ? null : _handlePlaceOrder,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E5FF),
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: _isPlacingOrder
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                  : const Text('Place Order', style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 2. DFM Summary Card
+  Widget _buildDfmSummaryCard() {
+    return _sidebarCard(
+      title: 'DFM ANALYSIS SUMMARY',
+      icon: Icons.bug_report_outlined,
+      iconColor: const Color(0xFFFFD54F),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: _dfmReport.statusMap.entries.map((e) {
+              final status = e.value;
+              Color color = const Color(0xFF00E676);
+              if (status == 'WARNING') color = const Color(0xFFFFD54F);
+              if (status == 'REJECTED') color = const Color(0xFFFF3D00);
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: color.withOpacity(0.2)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(e.key, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+                    const SizedBox(width: 4),
+                    Text(status, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: color)),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'VIOLATIONS LOG',
+            style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+          ),
+          const SizedBox(height: 6),
+          if (_dfmReport.violations.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00E676).withOpacity(0.04),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF00E676).withOpacity(0.1)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.verified, size: 14, color: Color(0xFF00E676)),
+                  SizedBox(width: 8),
+                  Text('All DFM rules passed.', style: TextStyle(color: Color(0xFF00E676), fontSize: 12)),
+                ],
+              ),
+            )
+          else
+            Container(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: Scrollbar(
+                thumbVisibility: true,
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: _dfmReport.violations.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (ctx, index) {
+                    final v = _dfmReport.violations[index];
+                    final isSelected = _selectedViolation == v;
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          _selectedViolation = v;
+                          _zoom = 6.0;
+                          _is3DMode = false;
+                        });
+                        // Centering requires size from layout. We'll center on next paint or use fallback.
+                        // We will set pan based on size estimates, viewer is generally ~700 wide.
+                        _centerOnGerberCoordinate(v.position, const Size(700, 680));
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: isSelected ? const Color(0xFFFF3D00).withOpacity(0.12) : Colors.white.withOpacity(0.02),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isSelected ? const Color(0xFFFF3D00).withOpacity(0.4) : Colors.white.withOpacity(0.05),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Text('⚠️ ', style: TextStyle(fontSize: 11)),
+                                Expanded(
+                                  child: Text(
+                                    v.ruleName,
+                                    style: TextStyle(
+                                      color: isSelected ? const Color(0xFFFF8A80) : Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                Text(
+                                  v.layerName,
+                                  style: const TextStyle(color: Colors.white30, fontSize: 9, fontFamily: 'monospace'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              v.description,
+                              style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 10),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 3. Layer visibility card
+  Widget _buildLayerCard() {
+    final layers = [
+      {'label': 'Board Outline', 'key': 'outline'},
+      {'label': 'Drills & Holes', 'key': 'drill'},
+      {'label': 'Top Copper', 'key': 'top_copper'},
+      {'label': 'Inner Copper', 'key': 'inner_copper'},
+      {'label': 'Bottom Copper', 'key': 'bottom_copper'},
+      {'label': 'Top Solder Mask', 'key': 'top_soldermask'},
+      {'label': 'Bottom Solder Mask', 'key': 'bottom_soldermask'},
+      {'label': 'Top Silkscreen', 'key': 'top_silkscreen'},
+      {'label': 'Bottom Silkscreen', 'key': 'bottom_silkscreen'},
+      {'label': 'Top Solder Paste', 'key': 'top_paste'},
+      {'label': 'Bottom Solder Paste', 'key': 'bottom_paste'},
+    ];
+
+    return _sidebarCard(
+      title: 'LAYERS MANAGER',
+      icon: Icons.layers_outlined,
+      iconColor: const Color(0xFFBB86FC),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _textButton('Show All', () {
+                setState(() {
+                  _visibleLayers.addAll(layers.map((l) => l['key']!));
+                });
+              }),
+              _textButton('Hide All', () {
+                setState(() {
+                  _visibleLayers.clear();
+                  _visibleLayers.add('outline'); // Keep outline always visible
+                });
+              }),
+              _textButton('Solo Active', () {
+                setState(() {
+                  _visibleLayers.clear();
+                  _visibleLayers.add('outline');
+                  _visibleLayers.add(_selectedLayer);
+                  if (_selectedLayer.contains('top')) {
+                    _visibleLayers.add('top_soldermask');
+                    _visibleLayers.add('top_silkscreen');
+                  } else {
+                    _visibleLayers.add('bottom_soldermask');
+                    _visibleLayers.add('bottom_silkscreen');
+                  }
+                });
+              }),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(
+            constraints: const BoxConstraints(maxHeight: 220),
+            child: Scrollbar(
+              thumbVisibility: true,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: layers.length,
+                itemBuilder: (ctx, index) {
+                  final l = layers[index];
+                  final key = l['key']!;
+                  final label = l['label']!;
+                  final isVisible = _visibleLayers.contains(key);
+                  final isActive = _selectedLayer == key;
+
+                  return Container(
+                    height: 32,
+                    margin: const EdgeInsets.symmetric(vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    decoration: BoxDecoration(
+                      color: isActive ? Colors.white.withOpacity(0.04) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+                          icon: Icon(
+                            isVisible ? Icons.visibility : Icons.visibility_off,
+                            color: isVisible ? const Color(0xFFBB86FC) : Colors.white24,
+                            size: 16,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              if (isVisible) {
+                                _visibleLayers.remove(key);
+                              } else {
+                                _visibleLayers.add(key);
+                              }
+                            });
+                          },
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: TextStyle(
+                              color: isVisible ? Colors.white : Colors.white30,
+                              fontSize: 12,
+                              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                        if (key.contains('copper') || key.contains('silk') || key.contains('mask') || key.contains('paste'))
+                          Radio<String>(
+                            value: key,
+                            groupValue: _selectedLayer,
+                            activeColor: const Color(0xFFBB86FC),
+                            onChanged: (v) {
+                              setState(() {
+                                _selectedLayer = v!;
+                                _visibleLayers.add(v);
+                              });
+                            },
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 4. Inspection & Grid Settings Card
+  Widget _buildInspectionSettingsCard() {
+    return _sidebarCard(
+      title: 'INSPECT & MEASURE',
+      icon: Icons.straighten_outlined,
+      iconColor: const Color(0xFF00E5FF),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Unit System', style: TextStyle(color: Color(0xFF8B8B9E), fontSize: 12)),
+              Row(
+                children: ['mm', 'mil', 'inch'].map((u) {
+                  final active = _units == u;
+                  return GestureDetector(
+                    onTap: () => setState(() => _units = u),
+                    child: Container(
+                      margin: const EdgeInsets.only(left: 4),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: active ? const Color(0xFF00E5FF).withOpacity(0.12) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: active ? const Color(0xFF00E5FF) : Colors.white10,
+                        ),
+                      ),
+                      child: Text(
+                        u.toUpperCase(),
+                        style: TextStyle(
+                          color: active ? const Color(0xFF00E5FF) : Colors.white30,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _infoRow('Cursor Pos', 'X: ${_formatValue(_mouseHoverGerber.dx)}\nY: ${_formatValue(_mouseHoverGerber.dy)}'),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Ruler Tool', style: TextStyle(color: Color(0xFF8B8B9E), fontSize: 12)),
+              Row(
+                children: [
+                  if (_measurementStart != null)
+                    IconButton(
+                      icon: const Icon(Icons.clear, size: 16, color: Colors.redAccent),
+                      onPressed: () => setState(() {
+                        _measurementStart = null;
+                        _measurementEnd = null;
+                      }),
+                    ),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _measurementMode = !_measurementMode;
+                        if (!_measurementMode) {
+                          _measurementStart = null;
+                          _measurementEnd = null;
+                        }
+                      });
+                    },
+                    icon: Icon(_measurementMode ? Icons.edit_off : Icons.edit, size: 13),
+                    label: Text(_measurementMode ? 'Active' : 'Measure'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _measurementMode ? const Color(0xFF00E5FF).withOpacity(0.15) : Colors.white12,
+                      foregroundColor: _measurementMode ? const Color(0xFF00E5FF) : Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (_measurementStart != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.02), borderRadius: BorderRadius.circular(8)),
+              child: Column(
+                children: [
+                  _measureValRow('X1', _measurementStart!.dx),
+                  _measureValRow('Y1', _measurementStart!.dy),
+                  _measureValRow('X2', (_measurementEnd ?? _mouseHoverGerber).dx),
+                  _measureValRow('Y2', (_measurementEnd ?? _mouseHoverGerber).dy),
+                  const Divider(color: Colors.white10, height: 12),
+                  _measureValRow('ΔX', ((_measurementEnd ?? _mouseHoverGerber).dx - _measurementStart!.dx).abs()),
+                  _measureValRow('ΔY', ((_measurementEnd ?? _mouseHoverGerber).dy - _measurementStart!.dy).abs()),
+                  _measureValRow('Total Distance', (_measurementStart! - (_measurementEnd ?? _mouseHoverGerber)).distance, isTotal: true),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          const Text('RULER & SNAP HINTS', style: TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          _snapToggle('Snap to Pads', _snapToPad, (v) => setState(() => _snapToPad = v!)),
+          _snapToggle('Snap to Tracks', _snapToTrack, (v) => setState(() => _snapToTrack = v!)),
+          _snapToggle('Snap to Drills', _snapToDrill, (v) => setState(() => _snapToDrill = v!)),
+          _snapToggle('Snap to Outline', _snapToOutline, (v) => setState(() => _snapToOutline = v!)),
+        ],
+      ),
+    );
+  }
+
+  // 5. PCB stats info card
+  Widget _buildPcbInfoCard() {
+    final bbox = widget.parseResult.topLayer?.bbox ?? const Rect.fromLTWH(0, 0, 100, 80);
+    final boardW = bbox.width;
+    final boardH = bbox.height;
+    final boardArea = boardW * boardH;
+
+    double calcPerimeter() {
+      if (widget.parseResult.boardOutline != null && widget.parseResult.boardOutline!.traces.isNotEmpty) {
+        double p = 0.0;
+        for (final t in widget.parseResult.boardOutline!.traces) {
+          p += (t.start - t.end).distance;
+        }
+        return p;
+      }
+      return 2 * (boardW + boardH);
+    }
+
+    double calcMinTrack() {
+      double m = double.infinity;
+      final layers = [widget.parseResult.topCopper, widget.parseResult.bottomCopper];
+      for (final l in layers) {
+        if (l == null) continue;
+        for (final t in l.traces) {
+          if (!t.isArc && t.width < m) m = t.width;
+        }
+      }
+      return m.isInfinite ? 0.2032 : m;
+    }
+
+    double calcMaxTrack() {
+      double m = 0.0;
+      final layers = [widget.parseResult.topCopper, widget.parseResult.bottomCopper];
+      for (final l in layers) {
+        if (l == null) continue;
+        for (final t in l.traces) {
+          if (!t.isArc && t.width > m) m = t.width;
+        }
+      }
+      return m;
+    }
+
+    final double minDrill = widget.parseResult.drills.isNotEmpty
+        ? widget.parseResult.drills.map((d) => d.diameter).reduce(math.min)
+        : 0.50;
+    final double maxDrill = widget.parseResult.drills.isNotEmpty
+        ? widget.parseResult.drills.map((d) => d.diameter).reduce(math.max)
+        : 1.00;
+
+    Widget metricGroup(String heading, IconData headIcon, Color headColor, List<Widget> rows) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(headIcon, size: 11, color: headColor),
+              const SizedBox(width: 5),
+              Text(
+                heading,
+                style: TextStyle(
+                  color: headColor.withOpacity(0.8),
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.9,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.025),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.white.withOpacity(0.04)),
+            ),
+            child: Column(
+              children: rows,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return _sidebarCard(
+      title: 'PCB METRICS',
+      icon: Icons.developer_board_outlined,
+      iconColor: const Color(0xFFFFD54F),
+      accentColor: const Color(0xFFFFD54F),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          metricGroup('BOARD GEOMETRY', Icons.crop_free, const Color(0xFF00E5FF), [
+            _infoRow('Dimensions', '${boardW.toStringAsFixed(2)} × ${boardH.toStringAsFixed(2)} mm', valueColor: Colors.white),
+            _infoRow('Area', '${boardArea.toStringAsFixed(1)} mm²'),
+            _infoRow('Perimeter', '${calcPerimeter().toStringAsFixed(1)} mm'),
+          ]),
+          const SizedBox(height: 12),
+          metricGroup('STACKUP', Icons.layers, const Color(0xFFBB86FC), [
+            _infoRow('Copper Layers', '$_layers Layers', valueColor: const Color(0xFFBB86FC)),
+            _infoRow('Board Type', widget.parseResult.boardType),
+            _infoRow('Material', widget.parseResult.material),
+          ]),
+          const SizedBox(height: 12),
+          metricGroup('DRILL & TRACE', Icons.adjust, const Color(0xFF00E676), [
+            _infoRow('Drill Holes', '${widget.parseResult.drills.length} holes', valueColor: const Color(0xFF00E676)),
+            _infoRow('Hole Ø Range', '${minDrill.toStringAsFixed(2)} – ${maxDrill.toStringAsFixed(2)} mm'),
+            _infoRow('Min Trace', _formatValue(calcMinTrack())),
+            _infoRow('Max Trace', _formatValue(calcMaxTrack())),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  // 2D & 3D Interactive Viewer Component
+  Widget _buildViewerContainer(BuildContext context, Size containerSize) {
+    final bbox = widget.parseResult.topLayer?.bbox ?? const Rect.fromLTWH(0, 0, 100, 80);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final currentWidth = constraints.maxWidth;
+        final currentHeight = _isFullscreen ? MediaQuery.of(context).size.height - 180 : containerSize.height;
+
+        return Container(
+          width: currentWidth,
+          height: currentHeight,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F1218),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withOpacity(0.05)),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Stack(
+              children: [
+                // 1. Rendering Viewport
+                if (!_is3DMode)
                   Positioned.fill(
-                    child: CustomPaint(
-                      painter: _CompositePCBPainter(
-                        isTop: title == 'Top',
-                        seed: _randomSeed,
-                        maskColor: _maskTintColor ?? const Color(0xFF1B4D3E),
+                    child: Listener(
+                      onPointerSignal: (pointerSignal) {
+                        if (pointerSignal is PointerScrollEvent) {
+                          final double delta = pointerSignal.scrollDelta.dy;
+                          final double scaleFactor = delta > 0 ? 0.90 : 1.10;
+                          
+                          final double oldZoom = _zoom;
+                          final double newZoom = (_zoom * scaleFactor).clamp(0.2, 300.0);
+                          final localPos = pointerSignal.localPosition;
+
+                          // Zoom relative to cursor point
+                          setState(() {
+                            const margin = 24.0;
+                            final double baseScale = math.min(
+                              (currentWidth - margin * 2) / bbox.width,
+                              (currentHeight - margin * 2) / bbox.height,
+                            );
+                            
+                            final screenCenter = Offset(currentWidth / 2, currentHeight / 2);
+                            final gerberCenter = bbox.center;
+
+                            final Offset cursorInGerber = Offset(
+                              (localPos.dx - screenCenter.dx - _pan.dx) / (baseScale * oldZoom) + gerberCenter.dx,
+                              -(localPos.dy - screenCenter.dy - _pan.dy) / (baseScale * oldZoom) + gerberCenter.dy,
+                            );
+
+                            _zoom = newZoom;
+
+                            final double rotatedDx = cursorInGerber.dx - gerberCenter.dx;
+                            final double rotatedDy = -(cursorInGerber.dy - gerberCenter.dy);
+
+                            _pan = Offset(
+                              localPos.dx - screenCenter.dx - rotatedDx * baseScale * newZoom,
+                              localPos.dy - screenCenter.dy - rotatedDy * baseScale * newZoom,
+                            );
+                          });
+                        }
+                      },
+                      child: GestureDetector(
+                        onPanUpdate: (details) {
+                          setState(() {
+                            _pan += details.delta;
+                          });
+                        },
+                        onTapDown: (details) {
+                          // Snapping math
+                          const margin = 24.0;
+                          final double baseScale = math.min(
+                            (currentWidth - margin * 2) / bbox.width,
+                            (currentHeight - margin * 2) / bbox.height,
+                          );
+
+                          final screenCenter = Offset(currentWidth / 2, currentHeight / 2);
+                          final gerberCenter = bbox.center;
+
+                          double dx = (details.localPosition.dx - screenCenter.dx - _pan.dx) / (baseScale * _zoom);
+                          double dy = (details.localPosition.dy - screenCenter.dy - _pan.dy) / (baseScale * _zoom);
+
+                          // Rotate back coordinates for geometry checks
+                          if (_rotationAngle != 0.0) {
+                            final double angle = -_rotationAngle;
+                            final double rx = dx * math.cos(angle) - dy * math.sin(angle);
+                            final double ry = dx * math.sin(angle) + dy * math.cos(angle);
+                            dx = rx;
+                            dy = ry;
+                          }
+                          dy = -dy; // Invert Y back to Gerber
+
+                          final clickedGerber = _findSnapPoint(Offset(dx + gerberCenter.dx, dy + gerberCenter.dy));
+
+                          if (_measurementMode) {
+                            setState(() {
+                              if (_measurementStart == null) {
+                                _measurementStart = clickedGerber;
+                              } else if (_measurementEnd == null) {
+                                _measurementEnd = clickedGerber;
+                              } else {
+                                _measurementStart = clickedGerber;
+                                _measurementEnd = null;
+                              }
+                            });
+                          } else {
+                            // Check if they clicked a DFM violation marker to zoom into it
+                            DfmViolation? clickedV;
+                            double bestV = 3.0; // max click radius in mm
+                            for (final v in _dfmReport.violations) {
+                              final d = (clickedGerber - v.position).distance;
+                              if (d < bestV) {
+                                bestV = d;
+                                clickedV = v;
+                              }
+                            }
+                            if (clickedV != null) {
+                              setState(() {
+                                _selectedViolation = clickedV;
+                                _zoom = 8.0;
+                              });
+                              _centerOnGerberCoordinate(clickedV.position, Size(currentWidth, currentHeight));
+                            }
+                          }
+                        },
+                        child: MouseRegion(
+                          cursor: _measurementMode ? SystemMouseCursors.precise : SystemMouseCursors.move,
+                          onHover: (details) {
+                            const margin = 24.0;
+                            final double baseScale = math.min(
+                              (currentWidth - margin * 2) / bbox.width,
+                              (currentHeight - margin * 2) / bbox.height,
+                            );
+
+                            final screenCenter = Offset(currentWidth / 2, currentHeight / 2);
+                            final gerberCenter = bbox.center;
+
+                            double dx = (details.localPosition.dx - screenCenter.dx - _pan.dx) / (baseScale * _zoom);
+                            double dy = (details.localPosition.dy - screenCenter.dy - _pan.dy) / (baseScale * _zoom);
+
+                            if (_rotationAngle != 0.0) {
+                              final double angle = -_rotationAngle;
+                              final double rx = dx * math.cos(angle) - dy * math.sin(angle);
+                              final double ry = dx * math.sin(angle) + dy * math.cos(angle);
+                              dx = rx;
+                              dy = ry;
+                            }
+                            dy = -dy;
+
+                            final gerberPt = Offset(dx + gerberCenter.dx, dy + gerberCenter.dy);
+                            setState(() {
+                              _mouseHoverGerber = _findSnapPoint(gerberPt);
+                            });
+                          },
+                          child: CustomPaint(
+                            size: Size(currentWidth, currentHeight),
+                            painter: GerberPCBPainter(
+                              parseResult: widget.parseResult,
+                              visibleLayers: _visibleLayers,
+                              maskColor: _maskColorVal,
+                              isTop: _selectedLayer.contains('top'),
+                              zoom: _zoom,
+                              pan: _pan,
+                              rotationAngle: _rotationAngle,
+                              viewSize: Size(currentWidth, currentHeight),
+                              gridSpacingMm: _gridSpacing,
+                              showGrid: _showGrid,
+                              violations: _dfmReport.violations,
+                              selectedViolation: _selectedViolation,
+                              measurementStart: _measurementStart,
+                              measurementEnd: _measurementEnd,
+                              mouseHoverGerber: _mouseHoverGerber,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Positioned.fill(
+                    child: Listener(
+                      onPointerSignal: (pointerSignal) {
+                        if (pointerSignal is PointerScrollEvent) {
+                          final double delta = pointerSignal.scrollDelta.dy;
+                          final double scaleFactor = delta > 0 ? 0.90 : 1.10;
+                          setState(() {
+                            _zoom = (_zoom * scaleFactor).clamp(0.1, 10.0);
+                          });
+                        }
+                      },
+                      child: GestureDetector(
+                        onPanUpdate: (d) {
+                          setState(() {
+                            _rotY += d.delta.dx * 0.008;
+                            _tiltX = (_tiltX - d.delta.dy * 0.008)
+                                .clamp(5 * math.pi / 180, 75 * math.pi / 180);
+                          });
+                        },
+                        child: CustomPaint(
+                          key: ValueKey('3d_${widget.parseResult.uploadId}_$_rotY'),
+                          painter: GerberPCB3DPainter(
+                            parseResult: widget.parseResult,
+                            maskColor: _maskColorVal,
+                            hiddenLayers: _visibleLayers.contains('drill') ? {} : {'All.drill'},
+                            rotY: _rotY,
+                            tiltX: _tiltX,
+                            zoom: _zoom,
+                          ),
+                        ),
                       ),
                     ),
                   ),
+
+                // 2. Crosshairs are drawn directly on the canvas in GerberPCBPainter for performance and style
+
+                // 3. Top-Right Toolbar Action Overlay
                 Positioned(
-                  left: 16,
-                  top: 16,
+                  right: 12,
+                  top: 12,
+                  child: Row(
+                    children: [
+                      _toolbarButton(_is3DMode ? Icons.view_in_ar : Icons.grid_on_outlined, () {
+                        setState(() {
+                          _is3DMode = !_is3DMode;
+                          _zoom = 1.0; // Reset zoom when switching modes
+                          _pan = Offset.zero;
+                        });
+                      }, tooltip: 'Toggle 2D/3D Mode', active: _is3DMode),
+                      const SizedBox(width: 6),
+                      _toolbarButton(Icons.zoom_in, () {
+                        setState(() => _zoom = (_zoom * 1.3).clamp(0.2, 300.0));
+                      }, tooltip: 'Zoom In'),
+                      const SizedBox(width: 6),
+                      _toolbarButton(Icons.zoom_out, () {
+                        setState(() => _zoom = (_zoom / 1.3).clamp(0.2, 300.0));
+                      }, tooltip: 'Zoom Out'),
+                      const SizedBox(width: 6),
+                      _toolbarButton(Icons.zoom_out_map, () {
+                        setState(() {
+                          _zoom = 1.0;
+                          _pan = Offset.zero;
+                          _rotationAngle = 0;
+                        });
+                      }, tooltip: 'Fit Board to View'),
+                      const SizedBox(width: 6),
+                      _toolbarButton(Icons.rotate_right_rounded, () {
+                        setState(() {
+                          _rotationAngle = (_rotationAngle + math.pi / 2) % (2 * math.pi);
+                        });
+                      }, tooltip: 'Rotate Board 90°'),
+                      const SizedBox(width: 6),
+                      _toolbarButton(_isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen, () {
+                        setState(() => _isFullscreen = !_isFullscreen);
+                      }, tooltip: 'Toggle Fullscreen', active: _isFullscreen),
+                    ],
+                  ),
+                ),
+
+                // 4. Bottom Grid Config overlay in 2D
+                if (!_is3DMode)
+                  Positioned(
+                    left: 12,
+                    bottom: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.7),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.grid_3x3, size: 14, color: Colors.white60),
+                          const SizedBox(width: 6),
+                          DropdownButtonHideUnderline(
+                            child: DropdownButton<double>(
+                              value: _gridSpacing,
+                              dropdownColor: const Color(0xFF13131A),
+                              icon: const Icon(Icons.arrow_drop_up, color: Colors.white70),
+                              style: const TextStyle(color: Colors.white, fontSize: 11),
+                              items: [
+                                {'label': '0.1 mm', 'val': 0.1},
+                                {'label': '0.25 mm', 'val': 0.25},
+                                {'label': '0.5 mm', 'val': 0.5},
+                                {'label': '1.0 mm', 'val': 1.0},
+                                {'label': '2.5 mm', 'val': 2.5},
+                                {'label': '10 mil', 'val': 0.254},
+                                {'label': '50 mil', 'val': 1.27},
+                                {'label': '100 mil', 'val': 2.54},
+                              ].map((item) {
+                                return DropdownMenuItem<double>(
+                                  value: item['val'] as double,
+                                  child: Text(item['label'] as String),
+                                );
+                              }).toList(),
+                              onChanged: (v) => setState(() => _gridSpacing = v!),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Checkbox(
+                            value: _showGrid,
+                            activeColor: const Color(0xFF00E5FF),
+                            checkColor: Colors.black,
+                            visualDensity: VisualDensity.compact,
+                            onChanged: (v) => setState(() => _showGrid = v!),
+                          ),
+                          const Text('Grid On', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                // 5. Active snapping coordinates indicator overlay
+                Positioned(
+                  left: 12,
+                  top: 12,
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF07070A).withOpacity(0.85),
+                      color: Colors.black.withOpacity(0.8),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                      border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.2)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'FILE: ${widget.fileName.toUpperCase()}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
+                          _is3DMode ? '3D VIEW' : 'INSPECT MODE',
+                          style: TextStyle(
+                            color: _is3DMode ? const Color(0xFFBB86FC) : const Color(0xFF00E5FF),
                             fontWeight: FontWeight.bold,
-                            fontFamily: 'monospace',
+                            fontSize: 10,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'LAYER: ${title.toUpperCase()} | COLOR: ${_maskColor.toUpperCase()}',
-                          style: const TextStyle(
-                            color: Color(0xFF00E5FF),
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            fontFamily: 'monospace',
+                        if (!_is3DMode) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'X: ${_formatValue(_mouseHoverGerber.dx)}',
+                            style: const TextStyle(color: Colors.white, fontSize: 11, fontFamily: 'monospace'),
                           ),
-                        ),
+                          Text(
+                            'Y: ${_formatValue(_mouseHoverGerber.dy)}',
+                            style: const TextStyle(color: Colors.white, fontSize: 11, fontFamily: 'monospace'),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -787,126 +1337,84 @@ Widget _buildDetectedLayersRow() {
               ],
             ),
           ),
-        ),
-        const SizedBox(height: 16),
-        Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
-      ],
+        );
+      },
     );
   }
 
-  Widget _buildViewerTab() {
-    final topLayer = widget.parseResult.topLayer;
-    final hasRealData = topLayer != null && topLayer.bbox.width > 0;
 
+
+  // Sidebar widget helpers
+  Widget _sidebarCard({
+    required String title,
+    required IconData icon,
+    required Color iconColor,
+    required Widget child,
+    Color? accentColor,
+  }) {
+    final accent = accentColor ?? iconColor;
     return Container(
-      height: 480,
+      width: double.infinity,
       decoration: BoxDecoration(
-        color: const Color(0xFF0A0A12),
-        border: Border.all(color: Colors.white.withOpacity(0.06)),
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFF13131D),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 14,
+            offset: const Offset(0, 5),
+          ),
+        ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: Stack(
           children: [
-           
-            if (hasRealData)
-              Positioned.fill(
-                child: GestureDetector(
-                  onPanUpdate: (d) {
-                    setState(() {
-                      _rotY  += d.delta.dx * 0.008;
-                      _tiltX  = (_tiltX - d.delta.dy * 0.008)
-                          .clamp(5 * math.pi / 180, 75 * math.pi / 180);
-                    });
-                  },
-                  child: CustomPaint(
-                    key: ValueKey('3d_${widget.parseResult.uploadId}'),
-                    painter: GerberPCB3DPainter(
-                      topLayer: topLayer!,
-                      maskColor: _maskTintColor ?? const Color(0xFF1B4D3E),
-                      hiddenLayers: _hiddenViewerLayers,
-                      rotY:  _rotY,
-                      tiltX: _tiltX,
-                    ),
-                  ),
-                ),
-              ),
-            if (!hasRealData)
-              Positioned.fill(
-                child: GestureDetector(
-                  onPanUpdate: (d) {
-                    setState(() {
-                      _rotY  += d.delta.dx * 0.008;
-                      _tiltX  = (_tiltX - d.delta.dy * 0.008)
-                          .clamp(5 * math.pi / 180, 75 * math.pi / 180);
-                    });
-                  },
-                  child: CustomPaint(
-                    painter: _Fake3DPainter(
-                      maskColor: _maskTintColor ?? const Color(0xFF1B4D3E),
-                      seed: _randomSeed,
-                      rotY: _rotY,
-                      tiltX: _tiltX,
-                    ),
-                  ),
-                ),
-              ),
+            // Accent top border
             Positioned(
-              left: 12, top: 12,
+              top: 0, left: 0, right: 0,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                height: 2,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF07070A).withOpacity(0.88),
-                  borderRadius: BorderRadius.circular(7),
-                  border: Border.all(color: const Color(0xFFBB86FC).withOpacity(0.3)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('FILE: ${widget.fileName.toUpperCase()}',
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
-                    const SizedBox(height: 3),
-                    Text('3D VIEW | ${_maskColor.toUpperCase()} MASK',
-                        style: const TextStyle(color: Color(0xFFBB86FC), fontSize: 9, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
-                  ],
-                ),
-              ),
-            ), 
-            Positioned(
-              right: 12, bottom: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.55),
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.open_with, color: Colors.white38, size: 13),
-                    SizedBox(width: 5),
-                    Text('Drag to rotate', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                  ],
+                  gradient: LinearGradient(
+                    colors: [accent.withOpacity(0.7), accent.withOpacity(0.0)],
+                  ),
                 ),
               ),
             ),
-            Positioned(
-              right: 12, top: 12,
-              child: GestureDetector(
-                onTap: () => setState(() {
-                  _rotY  = 28 * math.pi / 180;
-                  _tiltX = 32 * math.pi / 180;
-                }),
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.55),
-                    borderRadius: BorderRadius.circular(7),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: accent.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(7),
+                        ),
+                        child: Icon(icon, color: accent, size: 14),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ],
                   ),
-                  child: const Icon(Icons.refresh, color: Colors.white54, size: 16),
-                ),
+                  const SizedBox(height: 14),
+                  const Divider(color: Colors.white10, height: 1),
+                  const SizedBox(height: 14),
+                  child,
+                ],
               ),
             ),
           ],
@@ -915,286 +1423,209 @@ Widget _buildDetectedLayersRow() {
     );
   }
 
-  Widget _glassCard({required Widget child}) {
+  Widget _quoteRow(String label, String value, {required List<String> items, required ValueChanged<String?> onChanged}) {
     return Container(
-      width: double.infinity, padding: const EdgeInsets.all(28),
-      decoration: BoxDecoration(color: const Color(0xFF16161D), borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white.withOpacity(0.05))),
-      child: child,
+      margin: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.02),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 12)),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: value,
+              dropdownColor: const Color(0xFF13131A),
+              icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white38, size: 18),
+              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+              items: items.map((e) {
+                return DropdownMenuItem<String>(value: e, child: Text(e));
+              }).toList(),
+              onChanged: onChanged,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _cardTitle(IconData icon, String title, Color color) {
-    return Row(
-      children: [
-        Icon(icon, color: color, size: 20),
-        const SizedBox(width: 10),
-        Text(title, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 2)),
-      ],
+  Widget _infoRow(String label, String val, {Color? valueColor}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3.5),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: Color(0xFF6E6E85), fontSize: 11.5),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              val,
+              style: TextStyle(
+                color: valueColor ?? Colors.white.withOpacity(0.85),
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'monospace',
+              ),
+              textAlign: TextAlign.end,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _divider() => Divider(color: Colors.white.withOpacity(0.06), height: 1);
-}
-class _FlatPCBViewerPainter extends CustomPainter {
-  final Set<String> hiddenLayers;
-  final int seed;
-  _FlatPCBViewerPainter({required this.hiddenLayers, required this.seed});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-    final math.Random rand = math.Random(seed);
-
-    if (!hiddenLayers.contains('All.outline')) {
-      final boardRect = RRect.fromRectAndRadius(Rect.fromLTWH(0, 0, size.width, size.height), const Radius.circular(2));
-      bool topMask = !hiddenLayers.contains('Top.soldermask');
-      canvas.drawRRect(boardRect, Paint()..color = topMask ? const Color(0xFF4C984C) : const Color(0xFFD6943C));
-    }
-
-    if (!hiddenLayers.contains('Top.copper')) {
-      final tracePaint = Paint()
-        ..color = hiddenLayers.contains('Top.soldermask') ? const Color(0xFFDE9F4D) : const Color(0xFF5CB85C)
-        ..strokeWidth = 2.5 ..strokeCap = StrokeCap.round ..style = PaintingStyle.stroke;
-      final Path routing = Path();
-      for (int i = 0; i < 20; i++) {
-        double currentX = 20 + rand.nextDouble() * (size.width - 40);
-        double currentY = 20 + rand.nextDouble() * (size.height - 40);
-        routing.moveTo(currentX, currentY);
-        int segments = 1 + rand.nextInt(3);
-        for (int j = 0; j < segments; j++) {
-          if (rand.nextBool()) { currentX += (rand.nextBool() ? 15 : -15); } else { currentY += (rand.nextBool() ? 15 : -15); }
-          routing.lineTo(currentX, currentY);
-        }
-        canvas.drawCircle(Offset(currentX, currentY), 2.5, tracePaint..style = PaintingStyle.fill);
-        tracePaint.style = PaintingStyle.stroke;
-      }
-      canvas.drawPath(routing, tracePaint);
-    }
-
-    if (!hiddenLayers.contains('Top.solderpaste') || !hiddenLayers.contains('Top.copper')) {
-      final padPaint = Paint()..color = const Color(0xFFD4D4D4);
-      for (int i = 0; i < 8; i++) {
-        canvas.drawRect(Rect.fromLTWH(cx - 40, cy - 30 + i * 8, 10, 4), padPaint);
-        canvas.drawRect(Rect.fromLTWH(cx - 15, cy - 30 + i * 8, 10, 4), padPaint);
-      }
-      for (int i = 0; i < 5; i++) { canvas.drawCircle(Offset(cx + 90, cy - 20 + i * 14), 5, padPaint); }
-    }
-
-    if (!hiddenLayers.contains('All.drill')) {
-      final holePaint = Paint()..color = const Color(0xFFEAEAEA);
-      for (int i = 0; i < 5; i++) { canvas.drawCircle(Offset(cx + 90, cy - 20 + i * 14), 2.5, holePaint); }
-    }
-
-    if (!hiddenLayers.contains('Top.silkscreen')) {
-      final silkPaint = Paint()..color = Colors.white ..strokeWidth = 1.2 ..style = PaintingStyle.stroke;
-      canvas.drawRect(Rect.fromLTWH(cx - 42, cy - 32, 39, 66), silkPaint);
-      canvas.drawCircle(Offset(cx - 35, cy - 25), 1.5, Paint()..color = Colors.white);
-      canvas.drawRect(Rect.fromLTWH(30, 90, 20, 40), silkPaint);
-    }
+  Widget _measureValRow(String label, double val, {bool isTotal = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: TextStyle(color: isTotal ? const Color(0xFF00E5FF) : Colors.white38, fontSize: 11, fontWeight: isTotal ? FontWeight.bold : FontWeight.normal)),
+          Text(
+            _formatValue(val),
+            style: TextStyle(
+              color: isTotal ? const Color(0xFF00E5FF) : Colors.white70,
+              fontSize: 11,
+              fontFamily: 'monospace',
+              fontWeight: isTotal ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
-  @override
-  bool shouldRepaint(covariant _FlatPCBViewerPainter oldDelegate) => oldDelegate.hiddenLayers != hiddenLayers || oldDelegate.seed != seed;
-}
+  Widget _snapToggle(String label, bool value, ValueChanged<bool?> onChanged) {
+    return Container(
+      height: 24,
+      margin: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        children: [
+          Checkbox(
+            value: value,
+            activeColor: const Color(0xFF00E5FF),
+            checkColor: Colors.black,
+            visualDensity: VisualDensity.compact,
+            onChanged: onChanged,
+          ),
+          Text(label, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+        ],
+      ),
+    );
+  }
 
-class _CompositePCBPainter extends CustomPainter {
-  final bool isTop;
-  final int seed;
-  final Color maskColor;
-  _CompositePCBPainter({required this.isTop, required this.seed, this.maskColor = const Color(0xFF1B4D3E)});
+  Widget _textButton(String label, VoidCallback onTap) {
+    return TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(color: Color(0xFFBB86FC), fontSize: 10, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), Paint()..color = const Color(0xFF0A0A12));
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-    final boardW = size.width * 0.9;
-    final boardH = size.height * 0.85;
-    final boardRect = RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(cx, cy), width: boardW, height: boardH), const Radius.circular(6));
+  Widget _toolbarButton(IconData icon, VoidCallback onTap, {String? tooltip, bool active = false}) {
+    return Tooltip(
+      message: tooltip ?? '',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF00E5FF).withOpacity(0.2) : Colors.black.withOpacity(0.6),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: active ? const Color(0xFF00E5FF) : Colors.white10),
+          ),
+          child: Icon(
+            icon,
+            color: active ? const Color(0xFF00E5FF) : Colors.white70,
+            size: 16,
+          ),
+        ),
+      ),
+    );
+  }
 
-    canvas.drawRRect(boardRect, Paint()..color = const Color(0xFFD6943C));
-    
-    canvas.drawRRect(boardRect, Paint()..color = maskColor.withOpacity(0.85));
+  Widget _buildPill(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+      ),
+    );
+  }
 
-    final math.Random rand = math.Random(seed + (isTop ? 42 : 1337));
-    final tracePaint = Paint()..color = const Color(0xFFDE9F4D) ..strokeWidth = 2.0 ..strokeCap = StrokeCap.round ..strokeJoin = StrokeJoin.miter ..style = PaintingStyle.stroke;
-    final Path routing = Path();
-    for (int i = 0; i < (isTop ? 60 : 40); i++) {
-      double startX = cx - boardW/2 + 20 + rand.nextDouble() * (boardW - 40);
-      double startY = cy - boardH/2 + 20 + rand.nextDouble() * (boardH - 40);
-      routing.moveTo(startX, startY);
-      double currentX = startX;
-      double currentY = startY;
-      int segments = 2 + rand.nextInt(4);
-      for (int j = 0; j < segments; j++) {
-        if (rand.nextBool()) { currentX += (rand.nextBool() ? 20 : -20); } else { currentY += (rand.nextBool() ? 20 : -20); }
-        routing.lineTo(currentX, currentY);
-      }
-      canvas.drawCircle(Offset(currentX, currentY), 2.5, Paint()..color = const Color(0xFFDE9F4D)..style = PaintingStyle.fill);
+  // Preserved Place Order Firestore logic
+  Future<void> _handlePlaceOrder() async {
+    if (!AuthService.isLoggedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please log in first to place your order.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
     }
 
-    final polyPaint = Paint()..color = const Color(0xFFDCA152).withOpacity(0.8) ..style = PaintingStyle.fill;
-    if (isTop) {
-      final Path poly1 = Path();
-      poly1.moveTo(cx - 150, cy + 60); poly1.lineTo(cx - 20, cy + 60); poly1.lineTo(cx - 20, cy + 100); poly1.lineTo(cx - 150, cy + 100); poly1.close();
-      canvas.drawPath(poly1, polyPaint);
+    setState(() => _isPlacingOrder = true);
+
+    double boardW = 100;
+    double boardH = 100;
+    final dimParts = widget.parseResult.dimensions.toLowerCase().replaceAll('mm', '').split('x');
+    if (dimParts.length >= 2) {
+      boardW = double.tryParse(dimParts[0].trim()) ?? 100;
+      boardH = double.tryParse(dimParts[1].trim()) ?? 100;
+    }
+
+    final res = await FirebaseService.saveOrder(
+      userEmail: AuthService.userEmail ?? '',
+      fileName: widget.fileName,
+      layerCount: int.tryParse(_layers) ?? 2,
+      boardWidth: boardW,
+      boardHeight: boardH,
+      quantity: _qty,
+      totalPrice: _currentTotalPrice.toDouble(),
+      pcbMaterial: widget.parseResult.material,
+      pcbThickness: _pcbThickness,
+      pcbFinish: _finishOptions.first,
+    );
+
+    if (!mounted) return;
+    setState(() => _isPlacingOrder = false);
+
+    if (res['success'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Order Placed Successfully! Order ID: ${res['orderId']}'),
+          backgroundColor: const Color(0xFF00E5FF),
+        ),
+      );
     } else {
-      final Path poly2 = Path();
-      poly2.moveTo(cx + 40, cy - 100); poly2.lineTo(cx + 150, cy - 100); poly2.lineTo(cx + 150, cy - 30); poly2.lineTo(cx + 80, cy - 30); poly2.close();
-      canvas.drawPath(poly2, polyPaint);
-    }
-    canvas.drawPath(routing, tracePaint);
-
-    final padPaint = Paint()..color = const Color(0xFFB5B5BE) ..style = PaintingStyle.fill;
-    final holePaint = Paint()..color = const Color(0xFF1B1B1B) ..style = PaintingStyle.fill;
-
-    if (isTop) {
-      for (int i = -6; i <= 6; i++) {
-        if (i == 0) continue;
-        canvas.drawRect(Rect.fromCenter(center: Offset(cx + i * 4.5, cy - 25), width: 2.5, height: 8), padPaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(cx + i * 4.5, cy + 25), width: 2.5, height: 8), padPaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(cx - 25, cy + i * 4.5), width: 8, height: 2.5), padPaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(cx + 25, cy + i * 4.5), width: 8, height: 2.5), padPaint);
-      }
-    }
-    for (int i = 0; i < 8; i++) {
-      canvas.drawRect(Rect.fromCenter(center: Offset(cx - 100, cy - 60 + i * 6), width: 7, height: 3), padPaint);
-      canvas.drawRect(Rect.fromCenter(center: Offset(cx - 75, cy - 60 + i * 6), width: 7, height: 3), padPaint);
-    }
-    for (int i = 0; i < (isTop ? 40 : 25); i++) {
-      double px = cx - boardW/2 + 30 + rand.nextDouble() * (boardW - 60);
-      double py = cy - boardH/2 + 30 + rand.nextDouble() * (boardH - 60);
-      if (px > cx - 40 && px < cx + 40 && py > cy - 40 && py < cy + 40) continue;
-      if (rand.nextBool()) {
-        canvas.drawRect(Rect.fromCenter(center: Offset(px - 3, py), width: 3, height: 4.5), padPaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(px + 3, py), width: 3, height: 4.5), padPaint);
-      } else {
-        canvas.drawRect(Rect.fromCenter(center: Offset(px, py - 3), width: 4.5, height: 3), padPaint);
-        canvas.drawRect(Rect.fromCenter(center: Offset(px, py + 3), width: 4.5, height: 3), padPaint);
-      }
-    }
-    for (int i = 0; i < 20; i++) {
-      double px = cx - boardW/2 + 20 + rand.nextDouble() * (boardW - 40);
-      double py = cy - boardH/2 + 20 + rand.nextDouble() * (boardH - 40);
-      canvas.drawCircle(Offset(px, py), 2.5, padPaint);
-      canvas.drawCircle(Offset(px, py), 1.2, holePaint);
-    }
-    for (int i = 0; i < 10; i++) {
-      canvas.drawCircle(Offset(cx + boardW/2 - 30, cy - 80 + i * 15), 4.5, padPaint);
-      canvas.drawCircle(Offset(cx + boardW/2 - 30, cy - 80 + i * 15), 2.5, holePaint);
-    }
-    final mountingHoles = [
-      Offset(cx - boardW/2 + 25, cy - boardH/2 + 25), Offset(cx + boardW/2 - 25, cy - boardH/2 + 25),
-      Offset(cx - boardW/2 + 25, cy + boardH/2 - 25), Offset(cx + boardW/2 - 25, cy + boardH/2 - 25),
-    ];
-    for (var pos in mountingHoles) { canvas.drawCircle(pos, 10, padPaint); canvas.drawCircle(pos, 6, holePaint); }
-
-    if (isTop) {
-      final silkPaint = Paint()..color = Colors.white.withOpacity(0.85) ..strokeWidth = 1.2 ..style = PaintingStyle.stroke;
-      final textStyle = const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w600, fontFamily: 'monospace');
-      canvas.drawRect(Rect.fromCenter(center: Offset(cx, cy), width: 44, height: 44), silkPaint);
-      canvas.drawCircle(Offset(cx - 16, cy - 16), 2, Paint()..color = Colors.white..style = PaintingStyle.fill);
-      _drawText(canvas, 'U1', Offset(cx, cy - 5), textStyle);
-      _drawText(canvas, 'STM32', Offset(cx, cy + 5), textStyle.copyWith(fontSize: 6));
-      canvas.drawRect(Rect.fromCenter(center: Offset(cx - 87.5, cy - 39), width: 14, height: 50), silkPaint);
-      _drawText(canvas, 'U2', Offset(cx - 87.5, cy - 8), textStyle);
-      _drawText(canvas, 'AL_DEVELOPMENT_BRD', Offset(cx, cy + boardH/2 - 30), textStyle.copyWith(fontSize: 10));
-      _drawText(canvas, 'ARONLABZ TECH PVT LTD', Offset(cx, cy + boardH/2 - 18), textStyle.copyWith(fontSize: 10));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(res['error'] ?? 'Failed to place order.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
-
-  void _drawText(Canvas canvas, String text, Offset center, TextStyle style) {
-    final tp = TextPainter(text: TextSpan(text: text, style: style), textDirection: TextDirection.ltr, textAlign: TextAlign.center)..layout();
-    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
-  }
-
-  @override
-  bool shouldRepaint(_CompositePCBPainter old) => old.isTop != isTop || old.seed != seed || old.maskColor != maskColor;
-}
-
-class _Fake3DPainter extends CustomPainter {
-  final Color maskColor;
-  final int seed;
-  final double rotY;
-  final double tiltX;
-
-  const _Fake3DPainter({
-    required this.maskColor,
-    required this.seed,
-    this.rotY = 0.49,
-    this.tiltX = 0.56,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-    final boardW = size.width * 0.52;
-    final boardH = boardW * 0.65;
-    const thick = 10.0;
-
-    Offset proj(double lx, double ly, double lz) {
-      final rx = lx * math.cos(rotY) + lz * math.sin(rotY);
-      final rz = -lx * math.sin(rotY) + lz * math.cos(rotY);
-      final ry = ly * math.cos(tiltX) - rz * math.sin(tiltX);
-      return Offset(cx + rx, cy + ry * 0.82);
-    }
-
-    final tl  = proj(-boardW/2, -boardH/2,  thick/2);
-    final tr  = proj( boardW/2, -boardH/2,  thick/2);
-    final br  = proj( boardW/2,  boardH/2,  thick/2);
-    final bl  = proj(-boardW/2,  boardH/2,  thick/2);
-    final tlb = proj(-boardW/2, -boardH/2, -thick/2);
-    final trb = proj( boardW/2, -boardH/2, -thick/2);
-    final brb = proj( boardW/2,  boardH/2, -thick/2);
-    final blb = proj(-boardW/2,  boardH/2, -thick/2);
-
-    void quad(List<Offset> pts, Color color) {
-      final path = Path()
-        ..moveTo(pts[0].dx, pts[0].dy)
-        ..lineTo(pts[1].dx, pts[1].dy)
-        ..lineTo(pts[2].dx, pts[2].dy)
-        ..lineTo(pts[3].dx, pts[3].dy)
-        ..close();
-      canvas.drawPath(path, Paint()..color = color);
-    }
-
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), Paint()..color = const Color(0xFF0A0A12));
-    quad([tlb, trb, brb, blb], const Color(0xFF9A6218));
-    quad([tl, tlb, blb, bl],   const Color(0xFF7A4E10));
-    quad([tr, trb, brb, br],   const Color(0xFFBB7A1C));
-    quad([tl, tr, trb, tlb],   const Color(0xFF8A5A12));
-    quad([bl, br, brb, blb],   const Color(0xFF6A4510));
-
-    final topPath = Path()
-      ..moveTo(tl.dx, tl.dy)..lineTo(tr.dx, tr.dy)
-      ..lineTo(br.dx, br.dy)..lineTo(bl.dx, bl.dy)..close();
-    canvas.drawPath(topPath, Paint()..color = maskColor.withOpacity(0.90));
-
- 
-    final rand = math.Random(seed);
-    final tp = Paint()
-      ..color = const Color(0xFFDE9F4D).withOpacity(0.65)
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
-    for (int i = 0; i < 25; i++) {
-      final nx = (rand.nextDouble() - 0.5) * boardW;
-      final ny = (rand.nextDouble() - 0.5) * boardH;
-      final nx2 = nx + (rand.nextBool() ? 20 : 0) * (rand.nextBool() ? 1 : -1);
-      final ny2 = ny + (rand.nextBool() ? 0 : 20) * (rand.nextBool() ? 1 : -1);
-      canvas.drawLine(proj(nx, ny, thick/2 + 0.8), proj(nx2, ny2, thick/2 + 0.8), tp);
-    }
-
-    canvas.drawPath(topPath, Paint()
-      ..color = Colors.white.withOpacity(0.12)
-      ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke);
-  }
-
-  @override
-  bool shouldRepaint(_Fake3DPainter old) =>
-      old.maskColor != maskColor || old.seed != seed ||
-      old.rotY != rotY || old.tiltX != tiltX;
 }

@@ -1,43 +1,133 @@
-import '../services/mongodb_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../services/firebase_service.dart';
 
 class AuthService {
-  static bool get isLoggedIn => MongoDbService.isLoggedIn;
+  static final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  static String? get userName => MongoDbService.userName;
+  static bool get isLoggedIn => _auth.currentUser != null;
 
-  static String? get userEmail => MongoDbService.userEmail;
+  static String? get userName => _auth.currentUser?.displayName;
 
-  /// Registers a user using MongoDB. Returns null on success or an error message string on failure.
-  static Future<String?> register(String name, String email, String password) async {
-    final mongoResult = await MongoDbService.register(
-      name: name,
-      email: email,
-      password: password,
-    );
+  static String? get userEmail => _auth.currentUser?.email;
 
-    if (mongoResult['success'] == true) {
-      return null; // Success with MongoDB
-    }
+  static String? get userId => _auth.currentUser?.uid;
 
-    return mongoResult['error'] ?? 'Registration failed. Please check server connection.';
+  static Future<void> init() async {
+
   }
 
-  /// Logs in a user using MongoDB. Returns null on success or an error message string on failure.
-  static Future<String?> login(String email, String password) async {
-    final mongoResult = await MongoDbService.login(
-      email: email,
-      password: password,
-    );
-
-    if (mongoResult['success'] == true) {
-      return null; // Success with MongoDB
-    }
-
-    return mongoResult['error'] ?? 'Login failed. Please check server connection.';
+  static Future<Map<String, dynamic>> checkHealth() async {
+    return FirebaseService.checkHealth();
   }
 
-  /// Logs out the current user.
+  static Future<String?> register(
+      String name,
+      String email,
+      String password) async {
+    final result = await registerWithDetails(name, email, password);
+
+    if (result['success'] == true) {
+      return null;
+    }
+
+    return result['error'];
+  }
+
+  static Future<Map<String, dynamic>> registerWithDetails(
+      String name,
+      String email,
+      String password) async {
+    try {
+      final credential = await _auth
+          .createUserWithEmailAndPassword(
+            email: email.trim(),
+            password: password,
+          )
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () => throw Exception('Connection timed out. Please check your internet and try again.'),
+          );
+
+      final user = credential.user;
+
+      if (user != null) {
+        
+        Future(() async {
+          try {
+            await user.updateDisplayName(name.trim())
+                .timeout(const Duration(seconds: 5));
+            await FirebaseService.saveUserProfile(
+              uid: user.uid,
+              name: name,
+              email: email.trim(),
+            ).timeout(const Duration(seconds: 5));
+          } catch (_) {
+            
+          }
+        });
+      }
+
+      return {
+        'success': true,
+        'message': 'Account created successfully'
+      };
+    } on FirebaseAuthException catch (e) {
+      return {
+        'success': false,
+        'error': e.message ?? 'Registration failed'
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': e.toString()
+      };
+    }
+  }
+
+  static Future<String?> login(
+      String email,
+      String password) async {
+    final result = await loginWithDetails(email, password);
+
+    if (result['success'] == true) {
+      return null;
+    }
+
+    return result['error'];
+  }
+
+  static Future<Map<String, dynamic>> loginWithDetails(
+      String email,
+      String password) async {
+    try {
+      await _auth
+          .signInWithEmailAndPassword(
+            email: email.trim(),
+            password: password,
+          )
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () => throw Exception('Connection timed out. Please check your internet and try again.'),
+          );
+
+      return {
+        'success': true,
+        'message': 'Login successful'
+      };
+    } on FirebaseAuthException catch (e) {
+      return {
+        'success': false,
+        'error': e.message ?? 'Login failed'
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': e.toString()
+      };
+    }
+  }
+
   static Future<void> logout() async {
-    MongoDbService.logout();
+    await _auth.signOut();
   }
 }
