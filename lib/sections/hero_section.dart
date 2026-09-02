@@ -175,9 +175,9 @@ class HeroSection extends StatelessWidget {
 
   Widget _buildSubtitle(bool center) {
     return SizedBox(
-      width: center ? double.infinity : 520,
+      width: center ? double.infinity : 560,
       child: Text(
-        'FLASHFABZ delivers high-performance Power PCB Design & Manufacturing — engineered for reliability, thermal efficiency, and scale.',
+        'Flashfabz delivers high-performance PCBs engineered for speed, precision, and reliability. From rapid prototypes to scalable production, we turn innovative designs into dependable electronic solutions.',
         textAlign: center ? TextAlign.center : TextAlign.left,
         style: const TextStyle(color: Color(0xFFB0B0C0), fontSize: 17, height: 1.7),
       ),
