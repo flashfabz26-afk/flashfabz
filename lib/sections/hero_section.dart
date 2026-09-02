@@ -120,7 +120,7 @@ class HeroSection extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           const Text(
-            'NEXT-GEN PCB MANUFACTURING',
+            '8 HOUR PCB DELIVERY',
             style: TextStyle(
               color: Color(0xFF00E5FF),
               fontWeight: FontWeight.w800,
