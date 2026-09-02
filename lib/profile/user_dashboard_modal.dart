@@ -300,7 +300,6 @@ class _UserDashboardModalState extends State<UserDashboardModal> {
             onPressed: () => Navigator.pop(context),
             icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 24),
             hoverColor: Colors.white.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
           ),
         ],
       ),
