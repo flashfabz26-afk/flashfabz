@@ -12,6 +12,7 @@ import 'sections/footer_section.dart';
 import 'sections/gerber_upload_section.dart';
 import 'auth/login_page.dart';
 import 'auth/auth_service.dart';
+import 'profile/user_dashboard_modal.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -614,6 +615,49 @@ class _PopupCardState extends State<_PopupCard> {
             ),
           ),
 
+          // ── Profile Menu Options ──────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: Column(
+              children: [
+                _menuOptionTile(
+                  context,
+                  icon: Icons.person_outline_rounded,
+                  label: 'Edit Profile & Pic',
+                  tabIndex: 0,
+                ),
+                _menuOptionTile(
+                  context,
+                  icon: Icons.business_rounded,
+                  label: 'Company & B2B GST',
+                  tabIndex: 1,
+                  badge: 'GSTIN',
+                ),
+                _menuOptionTile(
+                  context,
+                  icon: Icons.folder_special_outlined,
+                  label: 'My PCB Projects',
+                  tabIndex: 2,
+                ),
+                _menuOptionTile(
+                  context,
+                  icon: Icons.receipt_long_rounded,
+                  label: 'Order History',
+                  tabIndex: 3,
+                ),
+                _menuOptionTile(
+                  context,
+                  icon: Icons.local_shipping_outlined,
+                  label: 'Shipment Tracking',
+                  tabIndex: 4,
+                  highlight: true,
+                ),
+              ],
+            ),
+          ),
+
+          const Divider(height: 1, color: Color(0xFF1E1E2D)),
+
           // ── Logout button ─────────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.all(12),
@@ -688,6 +732,71 @@ class _PopupCardState extends State<_PopupCard> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _menuOptionTile(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required int tabIndex,
+    String? badge,
+    bool highlight = false,
+  }) {
+    return InkWell(
+      onTap: () {
+        Navigator.pop(context);
+        UserDashboardModal.show(context, initialTabIndex: tabIndex);
+      },
+      borderRadius: BorderRadius.circular(10),
+      hoverColor: const Color(0xFF00E5FF).withOpacity(0.08),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 17,
+              color: highlight ? const Color(0xFF00E5FF) : Colors.white70,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: highlight ? const Color(0xFF00E5FF) : Colors.white.withOpacity(0.9),
+                  fontSize: 13,
+                  fontWeight: highlight ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ),
+            if (badge != null) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E5FF).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.4)),
+                ),
+                child: Text(
+                  badge,
+                  style: const TextStyle(
+                    color: Color(0xFF00E5FF),
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ] else ...[
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 16,
+                color: Colors.white24,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
