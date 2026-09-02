@@ -1,9 +1,9 @@
-# Lion Circuits (8HRPCB) - Project Specifications
+# Lion Circuits (FLASHFABZ) - Project Specifications
 
-This document outlines the technical specifications, architecture, and feature set of the **Lion Circuits (8HRPCB)** project based on the source code configuration.
+This document outlines the technical specifications, architecture, and feature set of the **Lion Circuits (FLASHFABZ)** project based on the source code configuration.
 
 ## 1. General Project Details
-- **App Name**: 8HRPCB (Internal Code Name: `lion_circuits`)
+- **App Name**: FLASHFABZ (Internal Code Name: `lion_circuits`)
 - **Framework**: Flutter
 - **Language**: Dart (SDK `^3.12.2`)
 - **Primary Platform**: Web/Mobile (Constructed as a scrolling single-page web app layout)
