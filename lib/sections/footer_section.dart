@@ -100,7 +100,7 @@ class FooterSection extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             const Text(
-              '8HRPCB',
+              'FLASHFABZ',
               style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2.5, color: Colors.white, fontSize: 16),
             ),
           ],
@@ -153,7 +153,7 @@ class FooterSection extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           const Text(
-            '© 2026 8HRPCB. All rights reserved.',
+            '© 2026 FLASHFABZ. All rights reserved.',
             style: TextStyle(color: Color(0xFF555566), fontSize: 12),
           ),
           Row(

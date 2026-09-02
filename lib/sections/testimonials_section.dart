@@ -23,7 +23,7 @@ class TestimonialsSection extends StatelessWidget {
             review: 'Fast delivery and excellent support. They helped us iterate our prototype quickly.',
           ),
           TestimonialCard(
-            review: 'Reliable manufacturing partner. We have been using 8HRPCB for all our power electronics needs.',
+            review: 'Reliable manufacturing partner. We have been using Flashfabz for all our power electronics needs.',
           ),
         ],
       ),
