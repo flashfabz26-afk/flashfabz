@@ -71,7 +71,7 @@ class _ContactSectionState extends State<ContactSection> {
           style: TextStyle(color: Color(0xFFB0B0C0), fontSize: 15, height: 1.7),
         ),
         const SizedBox(height: 40),
-        _contactRow(Icons.email_outlined, 'Email', 'contact@lioncircuits.com', const Color(0xFF00E5FF)),
+        _contactRow(Icons.email_outlined, 'Email', 'flashfabz26@gmail.com', const Color(0xFF00E5FF)),
         const SizedBox(height: 20),
         _contactRow(Icons.phone_outlined, 'Phone', '+91 80 1234 5678', const Color(0xFFFFD54F)),
         const SizedBox(height: 20),
