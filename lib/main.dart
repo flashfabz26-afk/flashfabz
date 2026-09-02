@@ -32,7 +32,7 @@ class LionCircuitsApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '8HRPCB — Premium PCB Manufacturing',
+      title: 'FLASHFABZ — Premium PCB Manufacturing',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -175,7 +175,7 @@ class _NavBarState extends State<_NavBar> {
                 ),
                 const SizedBox(width: 12),
                 const Text(
-                  '8HRPCB',
+                  'FLASHFABZ',
                   style: TextStyle(
                     fontWeight: FontWeight.w900,
                     letterSpacing: 2.5,
