@@ -329,7 +329,7 @@ class _SignupPageState extends State<SignupPage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Join 8HRPCB today',
+                          'Join  FLASHFABZ today',
                           style: TextStyle(
                             fontSize: 16,
                             color: Colors.white.withOpacity(0.6),
