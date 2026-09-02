@@ -47,7 +47,7 @@ class AboutUsSection extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         const Text(
-          '8HRPCB is a premier provider of Power PCB design, manufacturing, and testing services. With a commitment to innovation and precision, we bridge the gap between complex engineering concepts and physical realization.',
+          'FLASHFABZ is a premier provider of Power PCB design, manufacturing, and testing services. With a commitment to innovation and precision, we bridge the gap between complex engineering concepts and physical realization.',
           style: TextStyle(color: Color(0xFFB0B0C0), fontSize: 16, height: 1.8),
         ),
         const SizedBox(height: 16),
