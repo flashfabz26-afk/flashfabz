@@ -182,7 +182,7 @@ class _LoginPageState extends State<LoginPage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Sign in to continue to 8HRPCB',
+                          'Sign in to continue to FLASHFABZ',
                           style: TextStyle(
                             fontSize: 16,
                             color: Colors.white.withOpacity(0.6),
