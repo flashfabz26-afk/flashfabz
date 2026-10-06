@@ -75,8 +75,8 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
   double _ruleBoardThickness = 1.6;
   double _ruleCopperThicknessOz = 1.0;
   double _ruleMinDrill = 0.50;
-  double _ruleMinTrackWidth = 0.2032; // 8 mil
-  double _ruleMinClearance = 0.2032;  // 8 mil
+  double _ruleMinTrackWidth = 0.2; // 0.2 mm
+  double _ruleMinClearance = 0.2;  // 0.2 mm
   double _ruleMinAnnularRing = 0.15;
   double _ruleMinCopperToEdge = 0.30;
   
@@ -898,7 +898,7 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
           if (!t.isArc && t.width < m) m = t.width;
         }
       }
-      return m.isInfinite ? 0.2032 : m;
+      return m.isInfinite ? 0.2 : m;
     }
 
     double calcMaxTrack() {

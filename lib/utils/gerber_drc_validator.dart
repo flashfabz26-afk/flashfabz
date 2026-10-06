@@ -140,7 +140,7 @@ class GerberDrcValidator {
           statusMap['Track Width'] = 'REJECTED';
           violations.add(DfmViolation(
             ruleName: 'MINIMUM TRACK WIDTH VIOLATION',
-            description: 'Copper trace width is ${trace.width.toStringAsFixed(4)} mm (requires ≥ ${rules.minTrackWidth.toStringAsFixed(4)} mm).',
+            description: 'Copper trace width is ${trace.width.toStringAsFixed(4)} mm (requires ≥ ${_formatVal(rules.minTrackWidth)} mm).',
             position: Offset((trace.start.dx + trace.end.dx) / 2, (trace.start.dy + trace.end.dy) / 2),
             actualValue: trace.width,
             requiredValue: rules.minTrackWidth,
@@ -363,7 +363,7 @@ class GerberDrcValidator {
               
               violations.add(DfmViolation(
                 ruleName: 'MINIMUM CLEARANCE VIOLATION',
-                description: 'Clearance between features is ${dist.toStringAsFixed(4)} mm (requires ≥ ${minClearance.toStringAsFixed(4)} mm).',
+                description: 'Clearance between features is ${dist.toStringAsFixed(4)} mm (requires ≥ ${_formatVal(minClearance)} mm).',
                 position: midpoint,
                 actualValue: dist,
                 requiredValue: minClearance,
@@ -441,8 +441,8 @@ class GerberDrcValidator {
     
     final failures = report.violations.map((v) => DrcFailure(
       featureName: v.ruleName,
-      detectedValue: '${v.actualValue.toStringAsFixed(3)} mm',
-      requiredValue: '≥ ${v.requiredValue.toStringAsFixed(3)} mm',
+      detectedValue: '${v.actualValue.toStringAsFixed(4)} mm',
+      requiredValue: '≥ ${_formatVal(v.requiredValue)} mm',
       reason: v.description,
     )).toList();
     
@@ -472,4 +472,9 @@ class DrcResult {
 
   factory DrcResult.success() => const DrcResult(passed: true, failures: []);
   factory DrcResult.fail(List<DrcFailure> failures) => DrcResult(passed: false, failures: failures);
+}
+
+String _formatVal(double v) {
+  final s = v.toStringAsFixed(4);
+  return s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
 }

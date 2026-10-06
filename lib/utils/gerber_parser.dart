@@ -1237,7 +1237,7 @@ TOTAL ZIP ENTRIES: ${archive.length}
         }
       }
     }
-    if (minWidth.isInfinite || minWidth > 10) return '0.2032 mm';
+    if (minWidth.isInfinite || minWidth > 10) return '0.2 mm';
     if (minWidth < 0.05) minWidth *= 25.4;
     return '${minWidth.toStringAsFixed(3)} mm';
   }
