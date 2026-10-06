@@ -35,8 +35,8 @@ class DfmRules {
     this.boardThickness = 1.6,
     this.copperThicknessOz = 1.0,
     this.minDrillSize = 0.5,
-    this.minTrackWidth = 0.2032, // 8 mil
-    this.minClearance = 0.2032,  // 8 mil
+    this.minTrackWidth = 0.2, // ~7.87 mil
+    this.minClearance = 0.2,  // ~7.87 mil
     this.minAnnularRing = 0.15,
     this.minCopperToEdge = 0.3,
   });

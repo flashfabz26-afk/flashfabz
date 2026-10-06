@@ -20,27 +20,8 @@ class PasswordValidator {
       password.contains(RegExp(r'[!@#$%^&*()_+\-=\[\]{}|;:''",.<>?/]'));
   static bool hasNoSpaces(String password) => !password.contains(' ');
 
+  // Username/name is allowed in password — no restriction applied.
   static bool containsNameOrEmail(String password, String name, String email) {
-    if (password.isEmpty) return false;
-    final lowerPass = password.toLowerCase();
-    
-    // Check name parts
-    if (name.isNotEmpty) {
-      final nameParts = name.toLowerCase().split(' ');
-      for (var part in nameParts) {
-        if (part.length > 2 && lowerPass.contains(part)) {
-          return true;
-        }
-      }
-    }
-    
-    // Check email prefix
-    if (email.isNotEmpty && email.contains('@')) {
-      final emailPrefix = email.toLowerCase().split('@')[0];
-      if (emailPrefix.length > 2 && lowerPass.contains(emailPrefix)) {
-        return true;
-      }
-    }
     return false;
   }
 
@@ -74,7 +55,6 @@ class PasswordValidator {
         hasNumber(password) &&
         hasSpecialCharacter(password) &&
         hasNoSpaces(password) &&
-        !containsNameOrEmail(password, name, email) &&
         !isCommonPassword(password);
   }
 }
