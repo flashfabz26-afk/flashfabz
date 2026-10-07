@@ -34,6 +34,10 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
   // Sidebar scroll controller
   final ScrollController _sidebarScrollController = ScrollController();
 
+  // Sliding Right Panel State (3 Sections)
+  int _activeSectionIndex = 0; // 0: Specs & Metrics, 1: Instant Quote, 2: DFM & Layers
+  bool _isPanelExpanded = true;
+
   // Render & Visibility State
   final Set<String> _visibleLayers = {
     'top_copper',
@@ -283,45 +287,44 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
         LayoutBuilder(
           builder: (context, constraints) {
             final isWide = constraints.maxWidth > 1150;
-            const double viewerHeight = 720.0;
+            // Equalized square height for PCB Board Viewer & Features Sliding Box
+            final double equalBoxHeight = isWide 
+                ? (constraints.maxWidth - 436).clamp(580.0, 720.0) 
+                : 500.0;
+
             if (isWide) {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
-                    width: 380,
-                    height: viewerHeight,
-                    child: Listener(
-                      onPointerSignal: (event) {
-                        if (event is PointerScrollEvent) {
-                          final newOffset = (_sidebarScrollController.offset + event.scrollDelta.dy)
-                              .clamp(0.0, _sidebarScrollController.position.maxScrollExtent);
-                          _sidebarScrollController.jumpTo(newOffset);
-                        }
-                      },
-                      child: Scrollbar(
-                        controller: _sidebarScrollController,
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          controller: _sidebarScrollController,
-                          padding: const EdgeInsets.only(right: 8),
-                          child: _buildSidebar(context),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 20),
+                  // 1. PCB Gerber Canvas Viewer (Square aspect matching height)
                   Expanded(
-                    child: _buildViewerContainer(context, const Size(700, viewerHeight)),
+                    child: _buildViewerContainer(context, Size(equalBoxHeight, equalBoxHeight)),
                   ),
+                  const SizedBox(width: 16),
+                  // 2. 3 Sliding Sections Panel on RIGHT side (Exact SAME height)
+                  _buildSlidingRightPanel(context, equalBoxHeight),
                 ],
               );
             } else {
               return Column(
                 children: [
-                  _buildSidebar(context),
-                  const SizedBox(height: 20),
-                  _buildViewerContainer(context, const Size(600, 500)),
+                  // 1. PCB Board Canvas Viewer
+                  _buildViewerContainer(context, Size(constraints.maxWidth, equalBoxHeight)),
+                  const SizedBox(height: 18),
+                  // 2. Mobile 3-Section Sliding Tab Bar
+                  _buildMobileSectionTabs(),
+                  const SizedBox(height: 14),
+                  // 3. Active Section Content Card
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10121C),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: _buildActiveSectionContent(context),
+                  ),
                 ],
               );
             }
@@ -400,102 +403,765 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
     );
   }
 
-  // Left Sidebar Component
-  Widget _buildSidebar(BuildContext context) {
-    return Column(
+  // Right Side Sliding Panel Container (Holds the 3 Sections)
+  Widget _buildSlidingRightPanel(BuildContext context, double viewerHeight) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 320),
+      curve: Curves.fastOutSlowIn,
+      width: _isPanelExpanded ? 420 : 68,
+      height: viewerHeight,
+      decoration: BoxDecoration(
+        color: const Color(0xFF10121C),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.4),
+            blurRadius: 24,
+            offset: const Offset(-4, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Vertical Sliding Control Strip (68px)
+            _buildSlidingNavStrip(),
+
+            // Active Section Content Body (Visible when expanded)
+            if (_isPanelExpanded) ...[
+              Container(width: 1, color: Colors.white.withOpacity(0.06)),
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  layoutBuilder: (currentChild, previousChildren) {
+                    return Stack(
+                      alignment: Alignment.topLeft,
+                      children: <Widget>[
+                        ...previousChildren,
+                        if (currentChild != null) currentChild,
+                      ],
+                    );
+                  },
+                  transitionBuilder: (child, animation) {
+                    return SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0.08, 0.0),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: FadeTransition(opacity: animation, child: child),
+                    );
+                  },
+                  child: KeyedSubtree(
+                    key: ValueKey<int>(_activeSectionIndex),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(16),
+                        child: _buildActiveSectionContent(context),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Sliding Control Strip with 3 Section Buttons + Slide Toggle
+  Widget _buildSlidingNavStrip() {
+    return Container(
+      width: 67,
+      color: const Color(0xFF0C0E17),
+      child: Column(
+        children: [
+          const SizedBox(height: 14),
+          // Slide Collapse / Expand Toggle Button
+          Tooltip(
+            message: _isPanelExpanded ? 'Slide Panel Closed' : 'Slide Open 3 Sections',
+            child: InkWell(
+              onTap: () {
+                setState(() {
+                  _isPanelExpanded = !_isPanelExpanded;
+                });
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.04),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                ),
+                child: Icon(
+                  _isPanelExpanded ? Icons.chevron_right_rounded : Icons.chevron_left_rounded,
+                  color: const Color(0xFF00E5FF),
+                  size: 20,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Divider(color: Colors.white10, indent: 12, endIndent: 12),
+          const SizedBox(height: 10),
+
+          // Section 0: Specs
+          _buildNavTabButton(
+            index: 0,
+            title: 'Specs',
+            icon: Icons.developer_board_rounded,
+            accentColor: const Color(0xFFFFD54F),
+          ),
+          const SizedBox(height: 12),
+
+          // Section 1: Quote
+          _buildNavTabButton(
+            index: 1,
+            title: 'Quote',
+            icon: Icons.shopping_bag_outlined,
+            accentColor: const Color(0xFF00E5FF),
+            badgeText: '₹',
+          ),
+          const SizedBox(height: 12),
+
+          // Section 2: DFM Analysis
+          _buildNavTabButton(
+            index: 2,
+            title: 'DFM',
+            icon: Icons.bug_report_outlined,
+            accentColor: const Color(0xFFBB86FC),
+            badgeColor: _dfmReport.passed ? const Color(0xFF00E676) : const Color(0xFFFF3D00),
+          ),
+          const SizedBox(height: 12),
+
+          // Section 3: Layer Manager
+          _buildNavTabButton(
+            index: 3,
+            title: 'Layers',
+            icon: Icons.layers_rounded,
+            accentColor: const Color(0xFF00BCD4),
+          ),
+          const SizedBox(height: 12),
+
+          // Section 4: Inspect & Measure
+          _buildNavTabButton(
+            index: 4,
+            title: 'Inspect',
+            icon: Icons.straighten_rounded,
+            accentColor: const Color(0xFF00E676),
+          ),
+
+          const Spacer(),
+
+          if (!_isPanelExpanded)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Tooltip(
+                message: '3D Board View',
+                child: IconButton(
+                  icon: Icon(_is3DMode ? Icons.view_in_ar : Icons.grid_on_outlined, size: 18),
+                  color: Colors.white54,
+                  onPressed: () => setState(() => _is3DMode = !_is3DMode),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavTabButton({
+    required int index,
+    required String title,
+    required IconData icon,
+    required Color accentColor,
+    String? badgeText,
+    Color? badgeColor,
+  }) {
+    final bool isActive = _activeSectionIndex == index;
+    return Tooltip(
+      message: 'Section ${index + 1}: $title',
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            if (_activeSectionIndex == index && _isPanelExpanded) {
+              _isPanelExpanded = false;
+            } else {
+              _activeSectionIndex = index;
+              _isPanelExpanded = true;
+            }
+          });
+        },
+        borderRadius: BorderRadius.circular(14),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          width: 48,
+          height: 60,
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: isActive ? accentColor.withOpacity(0.14) : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isActive ? accentColor.withOpacity(0.7) : Colors.white.withOpacity(0.05),
+              width: isActive ? 1.5 : 1.0,
+            ),
+            boxShadow: isActive
+                ? [
+                    BoxShadow(
+                      color: accentColor.withOpacity(0.25),
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                    )
+                  ]
+                : [],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(
+                    icon,
+                    color: isActive ? accentColor : Colors.white54,
+                    size: 20,
+                  ),
+                  if (badgeColor != null)
+                    Positioned(
+                      right: -4,
+                      top: -2,
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: badgeColor,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(color: badgeColor.withOpacity(0.6), blurRadius: 4),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 9.5,
+                  fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+                  color: isActive ? accentColor : Colors.white38,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Horizontal Tab Bar for Mobile/Narrow Views
+  Widget _buildMobileSectionTabs() {
+    final sections = [
+      {'title': '1. Specs', 'icon': Icons.developer_board_rounded, 'color': const Color(0xFFFFD54F)},
+      {'title': '2. Quote', 'icon': Icons.shopping_bag_outlined, 'color': const Color(0xFF00E5FF)},
+      {'title': '3. DFM', 'icon': Icons.bug_report_outlined, 'color': const Color(0xFFBB86FC)},
+      {'title': '4. Layers', 'icon': Icons.layers_rounded, 'color': const Color(0xFF00BCD4)},
+      {'title': '5. Inspect', 'icon': Icons.straighten_rounded, 'color': const Color(0xFF00E676)},
+    ];
+
+    return Row(
+      children: List.generate(sections.length, (index) {
+        final item = sections[index];
+        final isActive = _activeSectionIndex == index;
+        final color = item['color'] as Color;
+
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => setState(() => _activeSectionIndex = index),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: EdgeInsets.only(right: index < sections.length - 1 ? 6 : 0),
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: isActive ? color.withOpacity(0.12) : const Color(0xFF10121C),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isActive ? color : Colors.white.withOpacity(0.06),
+                  width: isActive ? 1.5 : 1.0,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(item['icon'] as IconData, size: 14, color: isActive ? color : Colors.white54),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      item['title'] as String,
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: isActive ? FontWeight.bold : FontWeight.w500,
+                        color: isActive ? color : Colors.white54,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  // Active Section Switcher Renderer
+  Widget _buildActiveSectionContent(BuildContext context) {
+    switch (_activeSectionIndex) {
+      case 0:
+        return _buildPcbSpecsSection();
+      case 1:
+        return _buildInstantQuoteSection(context);
+      case 2:
+        return _buildDfmSection();
+      case 3:
+        return _buildLayerManagerSection();
+      case 4:
+      default:
+        return _buildInspectAndMeasureSection();
+    }
+  }
+
+  // Section Title Header Helper
+  Widget _buildSectionTitleHeader(String badge, String title, IconData icon, Color color) {
+    return Row(
       children: [
-        _buildPcbInfoCard(),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withOpacity(0.3)),
+          ),
+          child: Icon(icon, color: color, size: 18),
+        ),
+        const SizedBox(width: 12),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              badge,
+              style: TextStyle(color: color, fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 1),
+            ),
+            Text(
+              title,
+              style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _specBadge(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  // SECTION 1: PCB SPECS & METRICS
+  Widget _buildPcbSpecsSection() {
+    final bbox = widget.parseResult.topLayer?.bbox ?? const Rect.fromLTWH(0, 0, 100, 80);
+    final boardW = bbox.width;
+    final boardH = bbox.height;
+    final boardArea = boardW * boardH;
+
+    double calcPerimeter() {
+      if (widget.parseResult.boardOutline != null && widget.parseResult.boardOutline!.traces.isNotEmpty) {
+        double p = 0.0;
+        for (final t in widget.parseResult.boardOutline!.traces) {
+          p += (t.start - t.end).distance;
+        }
+        return p;
+      }
+      return 2 * (boardW + boardH);
+    }
+
+    double calcMinTrack() {
+      double m = double.infinity;
+      final layers = [widget.parseResult.topCopper, widget.parseResult.bottomCopper];
+      for (final l in layers) {
+        if (l == null) continue;
+        for (final t in l.traces) {
+          if (!t.isArc && t.width < m) m = t.width;
+        }
+      }
+      return m.isInfinite ? 0.2 : m;
+    }
+
+    double calcMaxTrack() {
+      double m = 0.0;
+      final layers = [widget.parseResult.topCopper, widget.parseResult.bottomCopper];
+      for (final l in layers) {
+        if (l == null) continue;
+        for (final t in l.traces) {
+          if (!t.isArc && t.width > m) m = t.width;
+        }
+      }
+      return m;
+    }
+
+    final double minDrill = widget.parseResult.drills.isNotEmpty
+        ? widget.parseResult.drills.map((d) => d.diameter).reduce(math.min)
+        : 0.50;
+    final double maxDrill = widget.parseResult.drills.isNotEmpty
+        ? widget.parseResult.drills.map((d) => d.diameter).reduce(math.max)
+        : 1.00;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitleHeader('SECTION 1 OF 5', 'PCB FEATURES & SPECS', Icons.developer_board_rounded, const Color(0xFFFFD54F)),
+        const SizedBox(height: 16),
+
+        // Primary Geometry Highlight Box
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                const Color(0xFFFFD54F).withOpacity(0.08),
+                const Color(0xFF00E5FF).withOpacity(0.03),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFFFFD54F).withOpacity(0.2)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'BOARD DIMENSIONS',
+                style: TextStyle(color: Color(0xFFFFD54F), fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    '${boardW.toStringAsFixed(2)} × ${boardH.toStringAsFixed(2)}',
+                    style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text('mm', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  _specBadge('Area: ${boardArea.toStringAsFixed(1)} mm²', const Color(0xFF00E5FF)),
+                  _specBadge('Perimeter: ${calcPerimeter().toStringAsFixed(1)} mm', const Color(0xFFBB86FC)),
+                ],
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Stackup & Material Card
+        _sidebarCard(
+          title: 'STACKUP & MATERIAL',
+          icon: Icons.layers,
+          iconColor: const Color(0xFFBB86FC),
+          child: Column(
+            children: [
+              _infoRow('Copper Layers', '$_layers Layers', valueColor: const Color(0xFFBB86FC)),
+              _infoRow('Board Type', widget.parseResult.boardType),
+              _infoRow('Substrate Material', widget.parseResult.material),
+              _infoRow('Default Finish', widget.parseResult.pcbFinish),
+            ],
+          ),
+        ),
+
         const SizedBox(height: 14),
-        _buildQuotationCard(context),
+
+        // Drill & Trace Metrics Card
+        _sidebarCard(
+          title: 'DRILL & TRACE PRECISION',
+          icon: Icons.adjust_rounded,
+          iconColor: const Color(0xFF00E676),
+          child: Column(
+            children: [
+              _infoRow('Drill Hole Count', '${widget.parseResult.drills.length} holes', valueColor: const Color(0xFF00E676)),
+              _infoRow('Hole Size Range', '${minDrill.toStringAsFixed(2)} – ${maxDrill.toStringAsFixed(2)} mm'),
+              _infoRow('Min Trace Width', _formatValue(calcMinTrack())),
+              _infoRow('Max Trace Width', _formatValue(calcMaxTrack())),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // SECTION 2: INSTANT QUOTE & ORDER
+  Widget _buildInstantQuoteSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitleHeader('SECTION 2 OF 5', 'INSTANT QUOTE & ORDER', Icons.shopping_bag_outlined, const Color(0xFF00E5FF)),
+        const SizedBox(height: 16),
+
+        // Solder Mask Interactive Color Picker
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF131522),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.15)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('SOLDER MASK COLOR', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: _maskColorVal.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: _maskColorVal),
+                    ),
+                    child: Text(
+                      _maskColorName,
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: _maskOptions.map((cName) {
+                  final isSel = _maskColorName.toLowerCase() == cName.toLowerCase();
+                  Color colorVal = Colors.green;
+                  switch (cName.toLowerCase()) {
+                    case 'green': colorVal = const Color(0xFF0F2F1D); break;
+                    case 'red': colorVal = const Color(0xFF8B0000); break;
+                    case 'blue': colorVal = const Color(0xFF0A2240); break;
+                    case 'black': colorVal = const Color(0xFF1B1B1E); break;
+                    case 'white': colorVal = const Color(0xFFE2E2E6); break;
+                    case 'yellow': colorVal = const Color(0xFFD4AC0D); break;
+                    case 'purple': colorVal = const Color(0xFF5B2C6F); break;
+                  }
+                  return GestureDetector(
+                    onTap: () => setState(() => _updateMaskColor(cName)),
+                    child: Tooltip(
+                      message: cName,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        width: isSel ? 32 : 26,
+                        height: isSel ? 32 : 26,
+                        decoration: BoxDecoration(
+                          color: colorVal,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isSel ? const Color(0xFF00E5FF) : Colors.white24,
+                            width: isSel ? 2.5 : 1.0,
+                          ),
+                          boxShadow: isSel
+                              ? [BoxShadow(color: const Color(0xFF00E5FF).withOpacity(0.6), blurRadius: 8)]
+                              : [],
+                        ),
+                        child: isSel
+                            ? Icon(Icons.check, size: 14, color: cName.toLowerCase() == 'white' ? Colors.black : Colors.white)
+                            : null,
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ),
+
         const SizedBox(height: 14),
+
+        // Manufacturing Specs Dropdowns
+        _sidebarCard(
+          title: 'SPECIFICATIONS',
+          icon: Icons.tune,
+          iconColor: const Color(0xFF00E5FF),
+          child: Column(
+            children: [
+              _quoteRow('Layers', _layers, items: _layerOptions, onChanged: (v) {
+                setState(() => _layers = v!);
+              }),
+              _quoteRow('Thickness', _pcbThickness, items: _thicknessOptions, onChanged: (v) {
+                setState(() => _pcbThickness = v!);
+                final thkVal = double.tryParse(v!.replaceAll(' mm', ''));
+                if (thkVal != null) {
+                  setState(() {
+                    _ruleBoardThickness = thkVal;
+                    _runDfm();
+                  });
+                }
+              }),
+              _quoteRow('Copper Weight', _copperThickness, items: _copperOptions, onChanged: (v) {
+                setState(() => _copperThickness = v!);
+                final ozVal = double.tryParse(v!.split(' ').first);
+                if (ozVal != null) {
+                  setState(() {
+                    _ruleCopperThicknessOz = ozVal;
+                    _runDfm();
+                  });
+                }
+              }),
+              _quoteRow('Surface Finish', _pcbFinish, items: _finishOptions, onChanged: (v) {
+                setState(() => _pcbFinish = v!);
+              }),
+              _quoteRow('Quantity', '$_qty pcs', items: _qtyOptions.map((e) => '$e pcs').toList(), onChanged: (v) {
+                setState(() {
+                  _qty = int.parse(v!.replaceAll(' pcs', ''));
+                });
+              }),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 14),
+
+        // Price Summary & Order Action Card
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF13192B), Color(0xFF1A122B)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF00E5FF).withOpacity(0.1),
+                blurRadius: 16,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('ESTIMATED PRICE', style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                      const SizedBox(height: 2),
+                      Text('₹ $_currentUnitPrice / pc', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                    ],
+                  ),
+                  Text(
+                    '₹ $_currentTotalPrice',
+                    style: const TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.w900, fontSize: 26),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton(
+                  onPressed: _isPlacingOrder ? null : _handlePlaceOrder,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E5FF),
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    elevation: 4,
+                    shadowColor: const Color(0xFF00E5FF).withOpacity(0.5),
+                  ),
+                  child: _isPlacingOrder
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                      : const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.flash_on_rounded, size: 18),
+                            SizedBox(width: 8),
+                            Text('PLACE ORDER NOW', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, letterSpacing: 0.5)),
+                          ],
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // SECTION 3: DFM ANALYSIS
+  Widget _buildDfmSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitleHeader('SECTION 3 OF 5', 'DFM ANALYSIS', Icons.bug_report_outlined, const Color(0xFFBB86FC)),
+        const SizedBox(height: 16),
         _buildDfmSummaryCard(),
-        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  // SECTION 4: LAYER MANAGER
+  Widget _buildLayerManagerSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitleHeader('SECTION 4 OF 5', 'LAYER MANAGER', Icons.layers_rounded, const Color(0xFF00BCD4)),
+        const SizedBox(height: 16),
         _buildLayerCard(),
-        const SizedBox(height: 14),
+      ],
+    );
+  }
+
+  // SECTION 5: INSPECT & MEASURE
+  Widget _buildInspectAndMeasureSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitleHeader('SECTION 5 OF 5', 'INSPECT & MEASURE TOOLS', Icons.straighten_rounded, const Color(0xFF00E676)),
+        const SizedBox(height: 16),
         _buildInspectionSettingsCard(),
       ],
     );
   }
 
-  // 1. Quotation & Order Card
-  Widget _buildQuotationCard(BuildContext context) {
-    return _sidebarCard(
-      title: 'QUOTATION & ORDER',
-      icon: Icons.shopping_cart_outlined,
-      iconColor: const Color(0xFF00E5FF),
-      child: Column(
-        children: [
-          _quoteRow('Layers', _layers, items: _layerOptions, onChanged: (v) {
-            setState(() => _layers = v!);
-          }),
-          _quoteRow('Thickness', _pcbThickness, items: _thicknessOptions, onChanged: (v) {
-            setState(() => _pcbThickness = v!);
-            final thkVal = double.tryParse(v!.replaceAll(' mm', ''));
-            if (thkVal != null) {
-              setState(() {
-                _ruleBoardThickness = thkVal;
-                _runDfm();
-              });
-            }
-          }),
-          _quoteRow('Copper Weight', _copperThickness, items: _copperOptions, onChanged: (v) {
-            setState(() => _copperThickness = v!);
-            final ozVal = double.tryParse(v!.split(' ').first);
-            if (ozVal != null) {
-              setState(() {
-                _ruleCopperThicknessOz = ozVal;
-                _runDfm();
-              });
-            }
-          }),
-          _quoteRow('Surface Finish', _pcbFinish, items: _finishOptions, onChanged: (v) {
-            setState(() => _pcbFinish = v!);
-          }),
-          _quoteRow('Solder Mask', _maskColorName, items: _maskOptions, onChanged: (v) {
-            setState(() {
-              _updateMaskColor(v!);
-            });
-          }),
-          _quoteRow('Quantity', '$_qty pcs', items: _qtyOptions.map((e) => '$e pcs').toList(), onChanged: (v) {
-            setState(() {
-              _qty = int.parse(v!.replaceAll(' pcs', ''));
-            });
-          }),
-          const SizedBox(height: 10),
-          const Divider(color: Colors.white10),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Est. Price:', style: TextStyle(color: Color(0xFF8B8B9E), fontSize: 13)),
-                Text(
-                  '₹ $_currentTotalPrice',
-                  style: const TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold, fontSize: 20),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _isPlacingOrder ? null : _handlePlaceOrder,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF00E5FF),
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: _isPlacingOrder
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
-                  : const Text('Place Order', style: TextStyle(fontWeight: FontWeight.w800)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   // 2. DFM Summary Card
   Widget _buildDfmSummaryCard() {
@@ -555,72 +1221,65 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
               ),
             )
           else
-            Container(
-              constraints: const BoxConstraints(maxHeight: 180),
-              child: Scrollbar(
-                thumbVisibility: true,
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: _dfmReport.violations.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 6),
-                  itemBuilder: (ctx, index) {
-                    final v = _dfmReport.violations[index];
-                    final isSelected = _selectedViolation == v;
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _selectedViolation = v;
-                          _zoom = 6.0;
-                          _is3DMode = false;
-                        });
-                        // Centering requires size from layout. We'll center on next paint or use fallback.
-                        // We will set pan based on size estimates, viewer is generally ~700 wide.
-                        _centerOnGerberCoordinate(v.position, const Size(700, 680));
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: isSelected ? const Color(0xFFFF3D00).withOpacity(0.12) : Colors.white.withOpacity(0.02),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: isSelected ? const Color(0xFFFF3D00).withOpacity(0.4) : Colors.white.withOpacity(0.05),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const Text('⚠️ ', style: TextStyle(fontSize: 11)),
-                                Expanded(
-                                  child: Text(
-                                    v.ruleName,
-                                    style: TextStyle(
-                                      color: isSelected ? const Color(0xFFFF8A80) : Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                Text(
-                                  v.layerName,
-                                  style: const TextStyle(color: Colors.white30, fontSize: 9, fontFamily: 'monospace'),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              v.description,
-                              style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 10),
-                            ),
-                          ],
+            Column(
+              children: List.generate(_dfmReport.violations.length, (index) {
+                final v = _dfmReport.violations[index];
+                final isSelected = _selectedViolation == v;
+                return Padding(
+                  padding: EdgeInsets.only(bottom: index < _dfmReport.violations.length - 1 ? 6 : 0),
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _selectedViolation = v;
+                        _zoom = 6.0;
+                        _is3DMode = false;
+                      });
+                      _centerOnGerberCoordinate(v.position, const Size(700, 680));
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: isSelected ? const Color(0xFFFF3D00).withOpacity(0.12) : Colors.white.withOpacity(0.02),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: isSelected ? const Color(0xFFFF3D00).withOpacity(0.4) : Colors.white.withOpacity(0.05),
                         ),
                       ),
-                    );
-                  },
-                ),
-              ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Text('⚠️ ', style: TextStyle(fontSize: 11)),
+                              Expanded(
+                                child: Text(
+                                  v.ruleName,
+                                  style: TextStyle(
+                                    color: isSelected ? const Color(0xFFFF8A80) : Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                v.layerName,
+                                style: const TextStyle(color: Colors.white30, fontSize: 9, fontFamily: 'monospace'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            v.description,
+                            style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 10),
+                            softWrap: true,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
             ),
         ],
       ),
@@ -679,78 +1338,70 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
               }),
             ],
           ),
-          const SizedBox(height: 6),
-          Container(
-            constraints: const BoxConstraints(maxHeight: 220),
-            child: Scrollbar(
-              thumbVisibility: true,
-              child: ListView.builder(
-                shrinkWrap: true,
-                itemCount: layers.length,
-                itemBuilder: (ctx, index) {
-                  final l = layers[index];
-                  final key = l['key']!;
-                  final label = l['label']!;
-                  final isVisible = _visibleLayers.contains(key);
-                  final isActive = _selectedLayer == key;
+          const SizedBox(height: 4),
+          Column(
+            children: List.generate(layers.length, (index) {
+              final l = layers[index];
+              final key = l['key']!;
+              final label = l['label']!;
+              final isVisible = _visibleLayers.contains(key);
+              final isActive = _selectedLayer == key;
 
-                  return Container(
-                    height: 32,
-                    margin: const EdgeInsets.symmetric(vertical: 2),
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    decoration: BoxDecoration(
-                      color: isActive ? Colors.white.withOpacity(0.04) : Colors.transparent,
-                      borderRadius: BorderRadius.circular(6),
+              return Container(
+                height: 32,
+                margin: const EdgeInsets.symmetric(vertical: 1),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: isActive ? Colors.white.withOpacity(0.04) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+                      icon: Icon(
+                        isVisible ? Icons.visibility : Icons.visibility_off,
+                        color: isVisible ? const Color(0xFFBB86FC) : Colors.white24,
+                        size: 16,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          if (isVisible) {
+                            _visibleLayers.remove(key);
+                          } else {
+                            _visibleLayers.add(key);
+                          }
+                        });
+                      },
                     ),
-                    child: Row(
-                      children: [
-                        IconButton(
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints.tightFor(width: 24, height: 24),
-                          icon: Icon(
-                            isVisible ? Icons.visibility : Icons.visibility_off,
-                            color: isVisible ? const Color(0xFFBB86FC) : Colors.white24,
-                            size: 16,
-                          ),
-                          onPressed: () {
-                            setState(() {
-                              if (isVisible) {
-                                _visibleLayers.remove(key);
-                              } else {
-                                _visibleLayers.add(key);
-                              }
-                            });
-                          },
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: TextStyle(
+                          color: isVisible ? Colors.white : Colors.white30,
+                          fontSize: 12,
+                          fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
                         ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            label,
-                            style: TextStyle(
-                              color: isVisible ? Colors.white : Colors.white30,
-                              fontSize: 12,
-                              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-                            ),
-                          ),
-                        ),
-                        if (key.contains('copper') || key.contains('silk') || key.contains('mask') || key.contains('paste'))
-                          Radio<String>(
-                            value: key,
-                            groupValue: _selectedLayer,
-                            activeColor: const Color(0xFFBB86FC),
-                            onChanged: (v) {
-                              setState(() {
-                                _selectedLayer = v!;
-                                _visibleLayers.add(v);
-                              });
-                            },
-                          ),
-                      ],
+                      ),
                     ),
-                  );
-                },
-              ),
-            ),
+                    if (key.contains('copper') || key.contains('silk') || key.contains('mask') || key.contains('paste'))
+                      Radio<String>(
+                        value: key,
+                        groupValue: _selectedLayer,
+                        activeColor: const Color(0xFFBB86FC),
+                        onChanged: (v) {
+                          setState(() {
+                            _selectedLayer = v!;
+                            _visibleLayers.add(v);
+                          });
+                        },
+                      ),
+                  ],
+                ),
+              );
+            }),
           ),
         ],
       ),
