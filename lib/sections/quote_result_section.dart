@@ -1233,6 +1233,11 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
                         _selectedViolation = v;
                         _zoom = 6.0;
                         _is3DMode = false;
+                        if (v.layerName.toLowerCase().contains('top')) {
+                          _selectedLayer = 'top_copper';
+                        } else if (v.layerName.toLowerCase().contains('bottom')) {
+                          _selectedLayer = 'bottom_copper';
+                        }
                       });
                       _centerOnGerberCoordinate(v.position, const Size(700, 680));
                     },
@@ -1756,6 +1761,11 @@ class _QuoteResultSectionState extends State<QuoteResultSection> {
                               setState(() {
                                 _selectedViolation = clickedV;
                                 _zoom = 8.0;
+                                if (clickedV!.layerName.toLowerCase().contains('top')) {
+                                  _selectedLayer = 'top_copper';
+                                } else if (clickedV!.layerName.toLowerCase().contains('bottom')) {
+                                  _selectedLayer = 'bottom_copper';
+                                }
                               });
                               _centerOnGerberCoordinate(clickedV.position, Size(currentWidth, currentHeight));
                             }

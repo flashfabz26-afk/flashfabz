@@ -66,8 +66,9 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final ScrollController _scrollController = ScrollController();
+  bool _assetsLoaded = false;
+  bool _isLoadingStarted = false;
 
- 
   final GlobalKey _heroKey      = GlobalKey();
   final GlobalKey _aboutKey     = GlobalKey();
   final GlobalKey _servicesKey  = GlobalKey();
@@ -84,6 +85,29 @@ class _HomePageState extends State<HomePage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_isLoadingStarted) {
+      _isLoadingStarted = true;
+      _loadAssets();
+    }
+  }
+
+  Future<void> _loadAssets() async {
+    // Boost image cache and preload PCB hero
+    PaintingBinding.instance.imageCache.maximumSizeBytes = 100 << 20; // 100 MB
+    await precacheImage(
+      const AssetImage('assets/images/pcb_hero_v2.jpg'),
+      context,
+    );
+    if (mounted) {
+      setState(() {
+        _assetsLoaded = true;
+      });
+    }
+  }
+
+  @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
@@ -91,6 +115,17 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_assetsLoaded) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF07070A),
+        body: Center(
+          child: CircularProgressIndicator(
+            color: Color(0xFF00E5FF),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: _NavBar(
