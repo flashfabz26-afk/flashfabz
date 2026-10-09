@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import '../auth/auth_service.dart';
 import '../services/firebase_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class UserDashboardModal extends StatefulWidget {
   final int initialTabIndex;
@@ -607,6 +611,11 @@ class _UserDashboardModalState extends State<UserDashboardModal> {
 
   // ── 3. My Projects Tab ───────────────────────────────────────────────────
   Widget _buildProjectsTab() {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      return const Center(child: Text('Please log in to view your projects.', style: TextStyle(color: Colors.white)));
+    }
+
     return Padding(
       padding: const EdgeInsets.all(28),
       child: Column(
@@ -633,59 +642,141 @@ class _UserDashboardModalState extends State<UserDashboardModal> {
           const SizedBox(height: 20),
 
           Expanded(
-            child: ListView.separated(
-              itemCount: _mockProjects.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final proj = _mockProjects[index];
-                return Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF13131A),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white.withOpacity(0.08)),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00E5FF).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.developer_board, color: Color(0xFF00E5FF), size: 24),
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('gerber_uploads')
+                  .where('userId', isEqualTo: currentUser.uid)
+                  .orderBy('uploadDate', descending: true)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)));
+                }
+
+                if (snapshot.hasError) {
+                  return Center(child: Text('Error loading projects: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent)));
+                }
+
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return const Center(
+                    child: Text('No uploaded Gerber projects found.', style: TextStyle(color: Color(0xFF8B8B9E), fontSize: 16)),
+                  );
+                }
+
+                final docs = snapshot.data!.docs;
+
+                return ListView.separated(
+                  itemCount: docs.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final data = doc.data() as Map<String, dynamic>;
+                    
+                    final fileName = data['fileName'] ?? 'Unknown File';
+                    final uploadStatus = data['uploadStatus'] ?? 'Uploaded';
+                    final fileSize = data['fileSize'] ?? 0;
+                    final sizeKb = (fileSize / 1024).toStringAsFixed(1);
+                    final uploadDate = (data['uploadDate'] as Timestamp?)?.toDate().toString().split('.')[0] ?? 'Recently';
+                    final downloadUrl = data['downloadUrl'];
+                    final storagePath = data['storagePath'];
+
+                    return Container(
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF13131A),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white.withOpacity(0.08)),
                       ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              proj['name'],
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00E5FF).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'ID: ${proj['id']}  •  ${proj['layers']} Layers  •  ${proj['dimensions']}  •  ${proj['material']}',
-                              style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 12),
+                            child: const Icon(Icons.developer_board, color: Color(0xFF00E5FF), size: 24),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  fileName,
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Size: $sizeKb KB  •  Uploaded: $uploadDate',
+                                  style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 12),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFD54F).withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: const Color(0xFFFFD54F).withOpacity(0.4)),
+                            ),
+                            child: Text(
+                              uploadStatus,
+                              style: const TextStyle(color: Color(0xFFFFD54F), fontSize: 11, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          if (downloadUrl != null)
+                            IconButton(
+                              icon: const Icon(Icons.download, color: Color(0xFF00E5FF)),
+                              tooltip: 'Download',
+                              onPressed: () async {
+                                final uri = Uri.parse(downloadUrl);
+                                if (await canLaunchUrl(uri)) {
+                                  await launchUrl(uri);
+                                }
+                              },
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                            tooltip: 'Delete',
+                            onPressed: () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  backgroundColor: const Color(0xFF13131A),
+                                  title: const Text('Delete Project?', style: TextStyle(color: Colors.white)),
+                                  content: const Text('Are you sure you want to delete this Gerber file?', style: TextStyle(color: Color(0xFFB0B0C0))),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx, false),
+                                      child: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                                    ),
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(ctx, true),
+                                      child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              
+                              if (confirm == true) {
+                                try {
+                                  if (storagePath != null) {
+                                    await FirebaseStorage.instance.ref(storagePath).delete();
+                                  }
+                                  await doc.reference.delete();
+                                } catch (e) {
+                                  debugPrint('Failed to delete: $e');
+                                }
+                              }
+                            },
+                          ),
+                        ],
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFD54F).withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: const Color(0xFFFFD54F).withOpacity(0.4)),
-                        ),
-                        child: Text(
-                          proj['status'],
-                          style: const TextStyle(color: Color(0xFFFFD54F), fontSize: 11, fontWeight: FontWeight.w700),
-                        ),
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 );
               },
             ),

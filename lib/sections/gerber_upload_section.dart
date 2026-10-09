@@ -40,20 +40,22 @@ class _GerberUploadSectionState extends State<GerberUploadSection> {
       _analyzeProgress = 0.0;
       _errorMessage = null;
     });
-    Future<GerberParseResult?> parseTask = GerberApiService.uploadGerber(fileName, bytes);
-
-    for (int i = 0; i <= 100; i += 2) {
-      await Future.delayed(const Duration(milliseconds: 30));
-      if (!mounted) return;
-      setState(() {
-        _analyzeProgress = i / 100.0;
-      });
-    }
 
     GerberParseResult? result;
     String? error;
     try {
-      result = await parseTask;
+      result = await GerberApiService.uploadGerber(
+        fileName, 
+        bytes,
+        onProgress: (progress) {
+          if (mounted) {
+            setState(() {
+              // Firebase upload progress maps to our progress bar
+              _analyzeProgress = progress;
+            });
+          }
+        },
+      );
     } catch (e) {
       error = e.toString().replaceFirst('Exception: ', '');
     }
